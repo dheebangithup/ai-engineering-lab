@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Analyst Agent | Flow Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <header>
+        <h1>📊 SQL Analyst <span>Agent</span></h1>
+        <div class="actions">
+            <button id="reset-btn"
+                style="background: var(--card-bg); border: 1px solid var(--border-color);">Reset</button>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Chat Area -->
+        <section class="chat-section">
+            <div id="chat-history">
+                <div class="message assistant-message">Hello! I'm your SQL analyst. Ask me anything about your sales
+                    data.</div>
+            </div>
+
+            <div class="input-area">
+                <form id="chat-form" class="input-container">
+                    <input type="text" id="user-input" placeholder="e.g., Show me the top 5 products by revenue"
+                        required autocomplete="off">
+                    <button type="submit" id="send-btn">Ask Claude</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- Process Flow Visualization -->
+        <section class="flow-section">
+            <div class="flow-header">
+                <span class="icon">⚡</span> Agent Process Flow
+            </div>
+            <div id="flow-container">
+                <!-- Flow steps will appear here -->
+                <div style="color: var(--text-secondary); text-align: center; margin-top: 2rem;">
+                    Flow visualization will appear once you ask a question.
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        const chatHistory = document.getElementById('chat-history');
+        const chatForm = document.getElementById('chat-form');
+        const userInput = document.getElementById('user-input');
+        const flowContainer = document.getElementById('flow-container');
+        const sendBtn = document.getElementById('send-btn');
+        const resetBtn = document.getElementById('reset-btn');
+
+        let currentAssistantMsgElement = null;
+
+        function addMessage(text, role) {
+            const div = document.createElement('div');
+            div.className = `message ${role}-message`;
+            div.textContent = text;
+            chatHistory.appendChild(div);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            return div;
+        }
+
+        function addFlowStep(type, content, extra = null) {
+            const div = document.createElement('div');
+            div.className = 'flow-step';
+
+            const typeLabel = document.createElement('span');
+            typeLabel.className = `step-type type-${type.toLowerCase()}`;
+            typeLabel.textContent = type;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'step-content';
+            contentDiv.textContent = content;
+
+            div.appendChild(typeLabel);
+            div.appendChild(contentDiv);
+
+            if (extra) {
+                if (type === 'SQL') {
+                    const pre = document.createElement('pre');
+                    pre.textContent = extra;
+                    div.appendChild(pre);
+                } else {
+                    const pre = document.createElement('pre');
+                    pre.style.color = 'var(--text-secondary)';
+                    pre.textContent = JSON.stringify(extra, null, 2);
+                    div.appendChild(pre);
+                }
+            }
+
+            flowContainer.appendChild(div);
+            flowContainer.scrollTop = flowContainer.scrollHeight;
+        }
+
+        chatForm.onsubmit = (e) => {
+            e.preventDefault();
+            const question = userInput.value.trim();
+            if (!question) return;
+
+            // Clear UI for new round
+            addMessage(question, 'user');
+            userInput.value = '';
+            flowContainer.innerHTML = '';
+            currentAssistantMsgElement = addMessage('', 'assistant');
+
+            sendBtn.disabled = true;
+
+            const url = `/stream?question=${encodeURIComponent(question)}`;
+            const eventSource = new EventSource(url);
+
+            eventSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'text') {
+                    currentAssistantMsgElement.textContent += data.content;
+                    chatHistory.scrollTop = chatHistory.scrollHeight;
+                }
+                else if (data.type === 'tool_start') {
+                    let type = 'TOOL';
+                    let content = `Calling ${data.name}...`;
+                    let extra = data.args;
+
+                    if (data.name === 'execute_sql_query') {
+                        type = 'SQL';
+                        content = data.args.explanation || 'Executing query';
+                        extra = data.args.query;
+                    }
+
+                    addFlowStep(type, content, extra);
+                }
+                else if (data.type === 'tool_result') {
+                    // Find the last tool/sql step and append the result
+                    const steps = flowContainer.querySelectorAll('.flow-step');
+                    if (steps.length > 0) {
+                        const lastStep = steps[steps.length - 1];
+                        const resultTitle = document.createElement('div');
+                        resultTitle.style.marginTop = '0.5rem';
+                        resultTitle.style.fontSize = '0.75rem';
+                        resultTitle.style.color = 'var(--accent-color)';
+                        resultTitle.textContent = 'Result:';
+
+                        const pre = document.createElement('pre');
+                        pre.style.marginTop = '0.25rem';
+                        pre.style.maxHeight = '200px';
+                        pre.style.overflowY = 'auto';
+                        pre.style.fontSize = '0.7rem';
+
+                        // Try to parse JSON for prettier display
+                        try {
+                            const parsed = JSON.parse(data.result);
+                            pre.textContent = JSON.stringify(parsed, null, 2);
+                        } catch (e) {
+                            pre.textContent = data.result;
+                        }
+
+                        lastStep.appendChild(resultTitle);
+                        lastStep.appendChild(pre);
+                        flowContainer.scrollTop = flowContainer.scrollHeight;
+                    }
+                }
+                else if (data.type === 'error') {
+                    addFlowStep('ERROR', data.content);
+                    eventSource.close();
+                    sendBtn.disabled = false;
+                }
+            };
+
+            eventSource.onerror = () => {
+                eventSource.close();
+                sendBtn.disabled = false;
+            };
+
+            // Heuristic to detect completion (SSE usually ends)
+            // The backend StreamingResponse will close the connection when the generator finishes.
+            // eventSource doesn't have a built-in 'complete' event, it just errors or we can send a custom event.
+        };
+
+        resetBtn.onclick = async () => {
+            await fetch('/reset', { method: 'POST' });
+            chatHistory.innerHTML = '<div class="message assistant-message">History cleared. How can I help?</div>';
+            flowContainer.innerHTML = '';
+        };
+    </script>
+</body>
+
+</html>

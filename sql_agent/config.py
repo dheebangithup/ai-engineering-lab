@@ -10,13 +10,13 @@ class Config:
     """Application configuration from environment variables."""
 
     # Anthropic API
-    MODEL: str = os.getenv("MODEL_NAME", "claude-sonnet-4-20250514")
+    MODEL: str = os.getenv("MODEL_NAME", "claude-3-haiku-20240307")
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4096"))
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))
     TIMEOUT: float = float(os.getenv("API_TIMEOUT", "60.0"))
 
     # Database
-    DB_PATH: str = os.getenv("DB_PATH", "../sales.db")
+    DB_PATH: str = os.getenv("DB_PATH", "sales.db")
     MAX_ROWS: int = int(os.getenv("MAX_ROWS", "1000"))
     QUERY_TIMEOUT: int = int(os.getenv("QUERY_TIMEOUT", "30"))
 
