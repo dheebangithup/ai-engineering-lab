@@ -5,11 +5,18 @@ import pandas as pd
 class DatabaseManager:
     """Manages database connections and operations"""
 
-    def __init__(self, db_path: str = "sales.db"):
+    def __init__(self, db_path: str = "sales.db", max_rows: int = 1000):
         self.db_path = db_path
         self.conn = None
-        self.max_rows = 1000
+        self.max_rows = max_rows
         self.timeout = 30
+
+    def __enter__(self):
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
     def connect(self):
         """Establish database connection"""

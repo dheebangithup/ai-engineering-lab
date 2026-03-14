@@ -1,11 +1,15 @@
 [project]
 name = "sql-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "An AI-powered SQL data analyst agent built with Claude and the Anthropic Python SDK"
 readme = "README.md"
-requires-python = ">=3.12"
+license = "MIT"
+requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.84.0",
-    "claude-agent-sdk>=0.1.48",
-    "pandas>=3.0.1",
+    "pandas>=2.0.0",
+    "python-dotenv>=1.0.0",
 ]
+
+[project.scripts]
+sql-agent = "main:main"

@@ -1,98 +1,86 @@
-from typing import Dict, Any
-import os
+"""
+SQL tools using the @beta_tool decorator from the Anthropic Python SDK.
 
+The @beta_tool decorator auto-generates tool JSON schemas from function
+signatures and docstrings — no more manual tool definitions needed.
+The tool_runner in the agent will automatically call these functions.
+"""
+
+import json
+from anthropic import beta_tool
 from core.data_base_manager import DatabaseManager
+from config import Config
 
 
-class SQLAnalystToolkit:
-    """Provides tools for Claude to use"""
-
-    def __init__(self):
-        self.db = DatabaseManager()
-        self.last_result = None
-
-    def initialize(self):
-        """Set up the toolkit"""
-        if not os.path.exists(self.db.db_path):
-            print("Creating sample database...")
-            self.db.initialize_sample_data()
-        else:
-            self.db.connect()
-            print(f"✓ Using existing database: {self.db.db_path}")
-
-    def get_schema(self) -> Dict[str, Any]:
-        """Tool: Get database schema"""
-        try:
-            schema = self.db.get_schema()
-            return {
-                "success": True,
-                "schema": schema
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-
-    def execute_query(self, query: str, explanation: str) -> Dict[str, Any]:
-        """Tool: Execute SQL query"""
-        print(f"\n🔍 Executing Query:")
-        print(f"   SQL: {query}")
-        print(f"   Purpose: {explanation}\n")
-
-        try:
-            df = self.db.execute_query(query)
-            self.last_result = df
-
-            return {
-                "success": True,
-                "rows_returned": len(df),
-                "columns": list(df.columns),
-                "data_preview": df.head(10).to_dict('records'),
-                "summary": f"Successfully retrieved {len(df)} rows"
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+# Shared database manager instance
+_db = DatabaseManager(db_path=Config.DB_PATH)
 
 
-    def cleanup(self):
-        """Clean up resources"""
-        self.db.close()
+def initialize_tools():
+    """Initialize the database connection for tools."""
+    import os
+    if not os.path.exists(_db.db_path):
+        print("Creating sample database...")
+        _db.initialize_sample_data()
+    else:
+        _db.connect()
+        print(f"✓ Using existing database: {_db.db_path}")
 
 
-# Tool definitions for Claude
-def get_tool_definitions():
-    """Return tool definitions for Claude API"""
-    return [
-        {
-            "name": "get_database_schema",
-            "description": "Get the complete database schema showing all tables and columns. Use this when you need to understand the database structure.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        },
-        {
-            "name": "execute_sql_query",
-            "description": "Execute a SQL SELECT query against the database. Returns structured data. Only SELECT queries are allowed for safety.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Valid SQL SELECT statement"
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "Brief explanation of what this query does"
-                    }
-                },
-                "required": ["query", "explanation"]
-            }
+def cleanup_tools():
+    """Clean up database resources."""
+    _db.close()
+
+
+@beta_tool
+def get_database_schema() -> str:
+    """Get the complete database schema showing all tables, columns, and their types.
+
+    Use this tool first to understand the database structure before writing queries.
+
+    Returns:
+        A formatted string showing all tables and their column definitions.
+    """
+    try:
+        schema = _db.get_schema()
+        return json.dumps({"success": True, "schema": schema})
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+@beta_tool
+def execute_sql_query(query: str, explanation: str) -> str:
+    """Execute a SQL SELECT query against the database and return structured results.
+
+    Only SELECT queries are allowed for safety. The query results are returned
+    as JSON with column names and data preview.
+
+    Args:
+        query: A valid SQL SELECT statement to execute.
+        explanation: Brief explanation of what this query does and why.
+
+    Returns:
+        JSON string with query results including row count, columns, and data preview.
+    """
+    print(f"\n🔍 Executing Query:")
+    print(f"   SQL: {query}")
+    print(f"   Purpose: {explanation}\n")
+
+    try:
+        df = _db.execute_query(query)
+
+        result = {
+            "success": True,
+            "rows_returned": len(df),
+            "columns": list(df.columns),
+            "data_preview": df.head(10).to_dict("records"),
+            "summary": f"Successfully retrieved {len(df)} rows",
         }
-    ]
+        return json.dumps(result, default=str)
+
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
+
+
+# List of all tools for the agent to use
+ALL_TOOLS = [get_database_schema, execute_sql_query]

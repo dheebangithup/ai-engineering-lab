@@ -1,94 +1,100 @@
-import json
+"""
+Claude SQL Agent using the modern Anthropic Python SDK.
 
-from tools.sql_tool import SQLAnalystToolkit, get_tool_definitions
-from anthropic import Anthropic, DefaultAioHttpClient
+Uses `@beta_tool` decorated functions with `tool_runner` for automatic
+tool-use orchestration — no manual agentic loop needed.
+"""
+
+import anthropic
+from anthropic import Anthropic
+from tools.sql_tool import ALL_TOOLS, initialize_tools, cleanup_tools
+from config import Config
 
 
 class ClaudeSQLAgent:
+    """SQL analyst agent powered by Claude with automatic tool orchestration."""
 
-    def __init__(self):
-        self.client = Anthropic()
-
-        self.toolkit = SQLAnalystToolkit()
-        self.toolkit.initialize()
-
-        self.tools = get_tool_definitions()
-
-    def ask(self, question: str):
-
-        messages = [
-            {
-                "role": "user",
-                "content": question
-            }
-        ]
-
-        system_prompt = """
-You are a professional data analyst.
-
-When answering questions about data:
-1. Always inspect database schema first
-2. Generate safe SQL queries
-3. Use tools to retrieve data
-4. Summarize results clearly
-"""
-
-        response = self.client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=1024,
-            system=system_prompt,
-            tools=self.tools,
-            messages=messages
+    def __init__(self, model: str = None):
+        self.model = model or Config.MODEL
+        self.client = Anthropic(
+            max_retries=Config.MAX_RETRIES,
+            timeout=Config.TIMEOUT,
         )
+        self.messages = []  # Conversation memory
 
-        # Agentic loop: keep going until Claude stops calling tools
-        while response.stop_reason == "tool_use":
-            # Process all tool_use blocks in this response
-            tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    tool_name = block.name
-                    tool_input = block.input
-                    print(f"\n🔧 Claude calling tool: {tool_name}")
+        # Initialize tools (connects to database)
+        initialize_tools()
 
-                    if tool_name == "get_database_schema":
-                        result = self.toolkit.get_schema()
-                    elif tool_name == "execute_sql_query":
-                        result = self.toolkit.execute_query(
-                            tool_input["query"],
-                            tool_input["explanation"]
-                        )
-                    else:
-                        result = {"error": "Unknown tool"}
+    def ask(self, question: str) -> str:
+        """
+        Ask the agent a question. Uses tool_runner to automatically
+        handle the tool-use loop (schema lookup → SQL execution → summary).
 
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result)
-                    })
+        Args:
+            question: Natural language question about the data.
 
-            # Append assistant response + all tool results
-            messages.append({
-                "role": "assistant",
-                "content": response.content
-            })
-            messages.append({
-                "role": "user",
-                "content": tool_results
-            })
+        Returns:
+            The agent's text response with data insights.
+        """
+        # Add user message to conversation history
+        self.messages.append({"role": "user", "content": question})
 
-            # Call the API again with updated messages
-            response = self.client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=1024,
-                system=system_prompt,
-                tools=self.tools,
-                messages=messages
+        try:
+            # tool_runner auto-handles the agentic loop:
+            #   1. Sends the message to Claude
+            #   2. If Claude wants to call a tool, it calls it automatically
+            #   3. Sends the tool result back to Claude
+            #   4. Repeats until Claude gives a final text response
+            runner = self.client.beta.messages.tool_runner(
+                model=self.model,
+                max_tokens=Config.MAX_TOKENS,
+                system=Config.SYSTEM_PROMPT,
+                tools=ALL_TOOLS,
+                messages=self.messages,
             )
 
-        # Extract final text response
-        for block in response.content:
-            if block.type == "text":
-                return block.text
+            final_response = None
+            for message in runner:
+                # Each iteration is an API round-trip
+                # The runner auto-executes tool calls and feeds results back
+                final_response = message
 
-        return "No response generated."
+            # Extract the final text from the last message
+            if final_response:
+                # Add assistant response to conversation memory
+                self.messages.append({
+                    "role": "assistant",
+                    "content": final_response.content,
+                })
+
+                # Extract text from content blocks
+                text_parts = []
+                for block in final_response.content:
+                    if hasattr(block, "text"):
+                        text_parts.append(block.text)
+
+                if text_parts:
+                    return "\n".join(text_parts)
+
+            return "No response generated."
+
+        except anthropic.AuthenticationError:
+            return "❌ Authentication failed. Please check your ANTHROPIC_API_KEY in .env"
+
+        except anthropic.RateLimitError:
+            return "⏳ Rate limit exceeded. Please wait a moment and try again."
+
+        except anthropic.APIConnectionError as e:
+            return f"🌐 Connection error: Could not reach the Anthropic API.\n   {e.__cause__}"
+
+        except anthropic.APIStatusError as e:
+            return f"❌ API error ({e.status_code}): {e.message}"
+
+    def reset_conversation(self):
+        """Clear conversation history to start fresh."""
+        self.messages = []
+        print("🔄 Conversation history cleared.")
+
+    def cleanup(self):
+        """Release resources."""
+        cleanup_tools()
