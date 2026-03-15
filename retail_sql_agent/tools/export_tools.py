@@ -10,7 +10,7 @@ from datetime import datetime
 from anthropic import beta_tool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.data_base_manager import DatabaseManager
+from core.database_manager import DatabaseManager
 
 _db = DatabaseManager()
 

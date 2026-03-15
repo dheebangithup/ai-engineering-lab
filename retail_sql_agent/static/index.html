@@ -36,8 +36,12 @@
 
         <!-- Process Flow Visualization -->
         <section class="flow-section">
-            <div class="flow-header">
-                <span class="icon">⚡</span> Agent Process Flow
+            <div class="flow-header" style="justify-content: space-between;">
+                <div><span class="icon">⚡</span> Agent Process Flow</div>
+                <div id="active-skills"
+                    style="display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end; flex-wrap: wrap;">
+                    <!-- Skill badges injected here -->
+                </div>
             </div>
             <div id="flow-container">
                 <!-- Flow steps will appear here -->
@@ -108,6 +112,7 @@
             addMessage(question, 'user');
             userInput.value = '';
             flowContainer.innerHTML = '';
+            document.getElementById('active-skills').innerHTML = '';
             currentAssistantMsgElement = addMessage('', 'assistant');
 
             sendBtn.disabled = true;
@@ -121,6 +126,25 @@
                 if (data.type === 'text') {
                     currentAssistantMsgElement.textContent += data.content;
                     chatHistory.scrollTop = chatHistory.scrollHeight;
+                }
+                else if (data.type === 'active_skills') {
+                    const skillsContainer = document.getElementById('active-skills');
+
+                    // Only initialize the title if it's the first skill badge we are adding
+                    if (skillsContainer.innerHTML.trim() === '') {
+                        skillsContainer.innerHTML = '<span style="font-size: 0.75rem; color: var(--text-secondary);">Using Skills:</span>';
+                    }
+
+                    data.content.forEach(skill => {
+                        // Avoid adding duplicate badges if Claude mentions it multiple times in a stream
+                        const existingBadges = Array.from(skillsContainer.getElementsByClassName('skill-badge'));
+                        if (!existingBadges.find(b => b.textContent === skill)) {
+                            const badge = document.createElement('span');
+                            badge.className = 'skill-badge';
+                            badge.textContent = skill;
+                            skillsContainer.appendChild(badge);
+                        }
+                    });
                 }
                 else if (data.type === 'tool_start') {
                     let type = 'TOOL';
@@ -186,6 +210,7 @@
             await fetch('/reset', { method: 'POST' });
             chatHistory.innerHTML = '<div class="message assistant-message">History cleared. How can I help?</div>';
             flowContainer.innerHTML = '';
+            document.getElementById('active-skills').innerHTML = '';
         };
     </script>
 </body>

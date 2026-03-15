@@ -3,7 +3,7 @@ Standalone toolkit test — verifies database connection and tools
 work correctly without calling the Claude API.
 """
 
-from tools.sql_tool import initialize_tools, get_database_schema, execute_sql_query, cleanup_tools
+from tools.database_tools import initialize_tools, get_database_schema, execute_sql_query, cleanup_tools
 
 
 def main():

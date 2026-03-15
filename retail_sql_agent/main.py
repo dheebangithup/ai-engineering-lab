@@ -12,7 +12,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from agent.skills_agent import SkillsSQLAgent
+from agent.retail_agent import RetailAgent
+from config import logger
 
 app = FastAPI(title="SQL Analyst Agent API")
 
@@ -26,11 +27,12 @@ app.add_middleware(
 )
 
 # Shared agent instance
-agent = SkillsSQLAgent()
+agent = RetailAgent()
 
 
 @app.get("/stream")
 async def stream_agent(question: str):
+    logger.info(f"Received question: {question}")
     """
     SSE Endpoint that streams agent flow events.
     Events: text, tool_start, tool_result, error
@@ -41,6 +43,7 @@ async def stream_agent(question: str):
                 # Format for SSE
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
+            logger.error(f"Error during streaming: {e}", exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -48,8 +51,16 @@ async def stream_agent(question: str):
 
 @app.post("/reset")
 async def reset_agent():
+    logger.info("Resetting agent conversation history.")
     agent.reset_conversation()
     return {"status": "success", "message": "Conversation history cleared."}
+
+@app.get("/skills")
+async def get_skills():
+    """Returns the list of currently loaded skills."""
+    skills = getattr(agent, "loaded_skills", [])
+    logger.debug(f"UI requested loaded skills. Returning {len(skills)} skills.")
+    return {"status": "success", "skills": skills}
 
 # Serve static files (UI)
 static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")

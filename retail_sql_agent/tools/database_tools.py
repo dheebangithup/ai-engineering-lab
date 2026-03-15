@@ -14,21 +14,33 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from anthropic import beta_tool
-from core.data_base_manager import DatabaseManager
-from config import Config
+from core.database_manager import DatabaseManager
+from config import Config, logger
 
 # Shared database manager instance
-_db = DatabaseManager(db_path=Config.DB_PATH)
+_db = DatabaseManager(db_url=Config.DATABASE_URL)
 
 
 def initialize_tools():
     """Initialize the database connection for tools."""
-    if not os.path.exists(_db.db_path):
-        print("Creating sample database...")
+    is_sqlite = _db.db_url.startswith("sqlite:///")
+    file_path = _db.db_url.replace("sqlite:///", "") if is_sqlite else ""
+    
+    # If SQLite and file doesn't exist, initialize data
+    if is_sqlite and not os.path.exists(file_path):
+        logger.info(f"Creating sample database at {file_path}...")
         _db.initialize_sample_data()
     else:
+        # Otherwise just connect normally
         _db.connect()
-        print(f"✓ Using existing database: {_db.db_path}")
+        try:
+            # Let's run a quick health test / init for non SQLite
+            if not is_sqlite:
+                _db.initialize_sample_data()
+        except Exception as e:
+            logger.warning(f"Database sample data init error (safe to ignore if using existing DB): {e}")
+            
+    logger.info(f"✓ Using database: {_db.db_url}")
 
 
 def cleanup_tools():
@@ -68,9 +80,8 @@ def execute_sql_query(query: str, explanation: str) -> str:
     Returns:
         JSON string with query results including row count, columns, and data preview.
     """
-    print(f"\n🔍 Executing Query:")
-    print(f"   SQL: {query}")
-    print(f"   Purpose: {explanation}\n")
+    logger.info(f"Executing SQL Query")
+    logger.debug(f"SQL: {query} | Purpose: {explanation}")
 
     try:
         df = _db.execute_query(query)

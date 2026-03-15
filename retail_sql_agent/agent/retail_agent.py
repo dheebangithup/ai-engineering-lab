@@ -16,10 +16,9 @@ load_dotenv()
 
 import anthropic
 from anthropic import AsyncAnthropic
-from tools.sql_tool import ALL_TOOLS as SQL_TOOLS, initialize_tools, cleanup_tools, _db as sql_db
-from tools.export_tool import export_to_csv, export_to_json
-from tools.quality_tool import check_data_quality
-from config import Config
+from tools.database_tools import ALL_TOOLS as SQL_TOOLS, initialize_tools, cleanup_tools, _db as sql_db
+from tools.export_tools import export_to_csv, export_to_json
+from config import Config, logger
 
 # Helper to get Anthropic-compatible tool definitions
 def get_tool_definitions():
@@ -64,11 +63,6 @@ def get_tool_definitions():
                 },
                 "required": ["query"],
             },
-        },
-        {
-            "name": "check_data_quality",
-            "description": "Run comprehensive data quality checks on the database.",
-            "input_schema": {"type": "object", "properties": {}, "required": []},
         }
     ]
 
@@ -78,11 +72,10 @@ TOOL_MAP = {
     "execute_sql_query": lambda **kwargs: sql_db.execute_query(kwargs["query"]),
     "export_to_csv": export_to_csv,
     "export_to_json": export_to_json,
-    "check_data_quality": check_data_quality,
 }
 
 
-class SkillsSQLAgent:
+class RetailAgent:
     """
     SQL Analyst Agent that implements the Skills architecture independently.
     Uses AsyncAnthropic for multi-turn streaming.
@@ -106,9 +99,9 @@ class SkillsSQLAgent:
                 with open(self.session_file, "r") as f:
                     data = json.load(f)
                     self.messages = data.get("messages", [])
-                    print(f"📂 Session restored ({len(self.messages)} messages).")
+                    logger.info(f"📂 Session restored ({len(self.messages)} messages).")
             except Exception as e:
-                print(f"Error loading session: {e}")
+                logger.error(f"Error loading session: {e}", exc_info=True)
 
     def _save_session(self):
         """Save conversation to disk."""
@@ -116,7 +109,7 @@ class SkillsSQLAgent:
             with open(self.session_file, "w") as f:
                 json.dump({"messages": self.messages}, f, indent=2)
         except Exception as e:
-            print(f"Error saving session: {e}")
+            logger.error(f"Error saving session: {e}", exc_info=True)
 
     def _load_skills(self) -> str:
         """Scan .claude/skills/ and build a combined system prompt."""
@@ -125,6 +118,7 @@ class SkillsSQLAgent:
             return ""
 
         skills_content = ["\n## AVAILABLE SKILLS\n"]
+        self.loaded_skills = []
         for skill_dir in os.listdir(skills_path):
             skill_md = os.path.join(skills_path, skill_dir, "SKILL.md")
             if os.path.isfile(skill_md):
@@ -138,9 +132,11 @@ class SkillsSQLAgent:
                                 content = f"**Skill Description**: {parts[1].strip()}\n{parts[2].strip()}"
                         
                         name = skill_dir.replace("-", " ").title()
+                        self.loaded_skills.append(name)
                         skills_content.append(f"### Skill: {name}\n{content}\n")
+                        logger.info(f"Loaded skill: {name}")
                 except Exception as e:
-                    print(f"Error loading skill {skill_dir}: {e}")
+                    logger.error(f"Error loading skill {skill_dir}: {e}", exc_info=True)
         
         return "\n".join(skills_content)
 
@@ -186,6 +182,19 @@ class SkillsSQLAgent:
                         if chunk.delta.type == "text_delta":
                             accumulated_text += chunk.delta.text
                             yield {"type": "text", "content": chunk.delta.text}
+                            
+                            # Check if the exact skill name is mentioned in the text stream
+                            active_skills = []
+                            acc_lower = accumulated_text.lower()
+                            for s in getattr(self, "loaded_skills", []):
+                                if s.lower() in acc_lower or s.replace(" ", "-").lower() in acc_lower:
+                                    active_skills.append(s)
+                                   
+                            # Deduplicate and update UI
+                            active_skills = list(set(active_skills))
+                            if active_skills:
+                                yield {"type": "active_skills", "content": active_skills}
+                                
                         elif chunk.delta.type == "input_json_delta":
                             tool_use_blocks[current_block_id]["input"] += chunk.delta.partial_json
                     
@@ -254,7 +263,7 @@ class SkillsSQLAgent:
                     self._save_session()
 
         except Exception as e:
-            traceback.print_exc()
+            logger.error(f"Agent Error: {str(e)}", exc_info=True)
             yield {"type": "error", "content": f"Agent Error: {str(e)}"}
 
     def _execute_tool(self, name: str, input_data: dict) -> Any:
@@ -264,16 +273,19 @@ class SkillsSQLAgent:
                 res = TOOL_MAP[name](**input_data)
                 if hasattr(res, 'to_json'): # Handle DataFrames
                     return res.to_json(orient="records", date_format="iso")
+                logger.debug(f"Executed tool {name} successfully.")
                 return str(res)
             except Exception as e:
+                logger.error(f"Error executing tool {name}: {str(e)}", exc_info=True)
                 return f"Error executing tool {name}: {str(e)}"
+        logger.warning(f"Tool {name} not found in TOOL_MAP.")
         return f"Error: Tool {name} not found"
 
     def reset_conversation(self):
         self.messages = []
         if os.path.exists(self.session_file):
             os.remove(self.session_file)
-        print("🔄 Conversation reset and session file cleared.")
+        logger.info("🔄 Conversation reset and session file cleared.")
 
     def cleanup(self):
         cleanup_tools()

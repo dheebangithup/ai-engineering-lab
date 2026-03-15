@@ -174,8 +174,15 @@ button:disabled {
 }
 
 @keyframes slideIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 .flow-step::before {
@@ -198,9 +205,36 @@ button:disabled {
     text-transform: uppercase;
 }
 
-.type-skill { background: rgba(121, 192, 255, 0.1); color: var(--skill-color); border: 1px solid var(--skill-color); }
-.type-tool { background: rgba(175, 245, 180, 0.1); color: var(--tool-color); border: 1px solid var(--tool-color); }
-.type-sql { background: rgba(210, 168, 255, 0.1); color: var(--sql-color); border: 1px solid var(--sql-color); }
+.type-skill {
+    background: rgba(121, 192, 255, 0.1);
+    color: var(--skill-color);
+    border: 1px solid var(--skill-color);
+}
+
+.type-tool {
+    background: rgba(175, 245, 180, 0.1);
+    color: var(--tool-color);
+    border: 1px solid var(--tool-color);
+}
+
+.type-sql {
+    background: rgba(210, 168, 255, 0.1);
+    color: var(--sql-color);
+    border: 1px solid var(--sql-color);
+}
+
+.skill-badge {
+    background: rgba(121, 192, 255, 0.15);
+    color: var(--skill-color);
+    border: 1px solid rgba(121, 192, 255, 0.3);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
 
 .step-content {
     font-size: 0.9375rem;
@@ -222,13 +256,16 @@ pre {
 ::-webkit-scrollbar {
     width: 6px;
 }
+
 ::-webkit-scrollbar-track {
     background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
     background: var(--border-color);
     border-radius: 10px;
 }
+
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-secondary);
 }
