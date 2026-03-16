@@ -54,12 +54,19 @@ from claude_agent_sdk import tool
 
 @tool(
     name="get_database_schema",
-    description="Get the complete database schema showing all tables, columns, and their types. Use this tool first to understand the database structure before writing queries.",
-    input_schema={}
+    description="Get the database schema. By default, it returns a list of table names. If specific 'tables' are provided, it returns the detailed schema (columns and types) for those tables. Follow a progressive disclosure pattern: list tables first, then request details for specific ones you need.",
+    input_schema={
+        "tables": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional list of table names to get detailed schema for."
+        }
+    }
 )
 async def get_database_schema_mcp(args: dict) -> dict:
     try:
-        schema = _db.get_schema()
+        tables = args.get("tables")
+        schema = _db.get_schema(tables=tables)
         return {"content": [{"type": "text", "text": json.dumps({"success": True, "schema": schema})}]}
     except Exception as e:
         return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)})}]}

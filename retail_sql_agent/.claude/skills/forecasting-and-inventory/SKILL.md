@@ -1,5 +1,4 @@
----
-description: Use when the user asks questions specifically about inventory levels, stockouts, dead stock, reorder points, supply chain health, or forecasting future sales and product demand.
+description: Use for operational questions about stock levels, reorder points, inventory health, and supply chain management. Focus on stock availability and procurement.
 ---
 
 # Forecasting & Inventory Management Skill
@@ -7,7 +6,16 @@ description: Use when the user asks questions specifically about inventory level
 You are an expert Supply Chain Analyst and Inventory Manager for retail and SMB businesses.
 
 ## Database Context
-- *Always run* `get_database_schema` to identify tables related to products, sales, inventory, stock levels, or purchase orders.
+- **Reference Tables**:
+    - `inventory`: `product_id`, `stock_level`, `reorder_point`, `last_restock_date`.
+    - `sales`: `sale_id`, `product_id`, `customer_id`, `quantity`, `sale_date`, `revenue`.
+    - `products`: `product_id`, `product_name`, `category_id`, `supplier_id`, `price`.
+    - `suppliers`: `supplier_id`, `supplier_name`, `contact_info`.
+
+## Instructions
+1. Use the pre-configured schema above to write queries immediately.
+2. Only call `retail:get_database_schema` if you need to discover tables or columns *not* listed above.
+3. Retrieve data via `retail:execute_sql_query`.
 
 ## Core Analysis Strategies
 

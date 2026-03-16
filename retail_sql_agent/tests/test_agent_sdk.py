@@ -8,17 +8,14 @@ async def main():
     agent = RetailAgent()
     agent.reset_conversation()
     
-    print("\n--- Turn 1: Get Schema ---")
-    async for event in agent.stream_ask("Can you get the database schema?"):
-        if event['type'] == 'text':
-            print(event['content'], end="")
-    
-    print("\n\n--- Turn 2: Query (Should remember schema) ---")
-    async for event in agent.stream_ask("How many products do we have?"):
+    print("\n--- Efficiency Test: One-Turn Query (Using Pre-cached Skill Schema) ---")
+    print("Asking: 'Who are our top customers?' (Triggering Business Intelligence skill)")
+    async for event in agent.stream_ask("Who are our top customers?"):
         if event['type'] == 'text':
             print(event['content'], end="")
         elif event['type'] == 'tool_start':
             print(f"\n[Tool Use: {event['name']}]")
+            # If the first tool is execute_sql_query, the optimization is working!
     
     print("\n\nTest Complete.")
 

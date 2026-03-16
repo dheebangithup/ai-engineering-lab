@@ -7,8 +7,8 @@ description: Use when the user wants to export, download, save, or write data to
 You export query results to files so the user can use data outside the agent.
 
 ## Instructions
-1. First use the **SQL Analyst skill** to retrieve the data via `execute_sql_query`
-2. Then call `export_to_csv` or `export_to_json` with appropriate filename and the SQL query
+1. First use the **SQL Analyst skill** to retrieve the data via `retail:execute_sql_query`
+2. Then call `retail:export_to_csv` or `retail:export_to_json` with appropriate filename and the SQL query
 3. Tell the user the **exact file path** where the export was saved
 4. Suggest meaningful filenames based on the content (e.g., `top_products_march_2025.csv`)
 
