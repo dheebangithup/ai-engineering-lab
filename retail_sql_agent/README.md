@@ -1,16 +1,16 @@
 # 📊 SQL Analyst Agent
 
-An AI-powered SQL data analyst agent built with **Claude** and the **Anthropic Python SDK**.
+An AI-powered SQL data analyst agent fully built with the **Claude Agent SDK**.
 
-Ask natural language questions about your data — the agent automatically inspects the database schema, writes SQL queries, executes them, and summarizes the results. Now featuring a **premium real-time dashboard** to visualize the agent's internal reasoning.
+Ask natural language questions about your data — the agent automatically inspects the database schema, writes SQL queries, executes them, and summarizes the results. Now featuring a **premium real-time dashboard** to visualize the agent's internal reasoning using the native SDK capabilities.
 
 ## Features
 
-- 🤖 **Claude-powered** — Uses Claude's tool-use capabilities via a modular **Skills** architecture
+- 🤖 **Claude Agent SDK** — Uses the native SDK for tool-orchestration and Skills deployment
 - ⚡ **Real-time Flow Visualizer** — See "behind-the-scenes" skill activation, tool calls, and executed SQL
 - 🌐 **Premium Web UI** — Dark-themed FastAPI dashboard with SSE streaming
 - 💬 **Conversation Memory** — Multi-turn context with session persistence to disk (`session.json`)
-- 🛡️ **Safe by default** — Only `SELECT` queries allowed, dangerous keywords blocked
+- 🛡️ **Safe by default** — Only `SELECT` queries allowed, dangerous keywords blocked via MCP
 - 🗄️ **Multi-database Support** — Connects to PostgreSQL, MySQL, and SQLite out of the box (`sqlalchemy`)
 - ⚙️ **Configurable** — Model, connection string, tokens all via environment variables
 

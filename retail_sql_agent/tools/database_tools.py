@@ -2,8 +2,8 @@
 SQL tools — core database tools for the SQL Analyst skill.
 
 Provides two interfaces:
-  - @beta_tool decorated functions for Anthropic SDK tool_runner
-  - Handler-style dicts (ALL_MCP_TOOLS) for claude_agent_sdk MCP server
+  - Native SDK @tool decorated functions for SDK MCP Server
+  - Internal helper functions for direct database access
 """
 
 import json
@@ -13,7 +13,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from anthropic import beta_tool
+
 from core.database_manager import DatabaseManager
 from config import Config, logger
 
@@ -48,38 +48,34 @@ def cleanup_tools():
     _db.close()
 
 
-# ─── @beta_tool versions (used by Anthropic SDK tool_runner) ────────────────
+from claude_agent_sdk import tool
 
-@beta_tool
-def get_database_schema() -> str:
-    """Get the complete database schema showing all tables, columns, and their types.
+# ─── Standard tool functions (used by SDK MCP Server) ────────────────
 
-    Use this tool first to understand the database structure before writing queries.
-
-    Returns:
-        A formatted string showing all tables and their column definitions.
-    """
+@tool(
+    name="get_database_schema",
+    description="Get the complete database schema showing all tables, columns, and their types. Use this tool first to understand the database structure before writing queries.",
+    input_schema={}
+)
+async def get_database_schema_mcp(args: dict) -> dict:
     try:
         schema = _db.get_schema()
-        return json.dumps({"success": True, "schema": schema})
+        return {"content": [{"type": "text", "text": json.dumps({"success": True, "schema": schema})}]}
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)})}]}
 
 
-@beta_tool
-def execute_sql_query(query: str, explanation: str) -> str:
-    """Execute a SQL SELECT query against the database and return structured results.
-
-    Only SELECT queries are allowed for safety. The query results are returned
-    as JSON with column names and data preview.
-
-    Args:
-        query: A valid SQL SELECT statement to execute.
-        explanation: Brief explanation of what this query does and why.
-
-    Returns:
-        JSON string with query results including row count, columns, and data preview.
-    """
+@tool(
+    name="execute_sql_query",
+    description="Execute a safe SQL SELECT query against the database and return structured results. Only SELECT queries are allowed for safety.",
+    input_schema={
+        "query": str,
+        "explanation": str
+    }
+)
+async def execute_sql_query_mcp(args: dict) -> dict:
+    query = args["query"]
+    explanation = args.get("explanation", "")
     logger.info(f"Executing SQL Query")
     logger.debug(f"SQL: {query} | Purpose: {explanation}")
 
@@ -92,45 +88,16 @@ def execute_sql_query(query: str, explanation: str) -> str:
             "data_preview": df.head(10).to_dict("records"),
             "summary": f"Successfully retrieved {len(df)} rows",
         }
-        return json.dumps(result, default=str)
+        return {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)})}]}
 
 
-# ─── Handler-style dicts (used by claude_agent_sdk create_sdk_mcp_server) ───
+# For compatibility/internal use if needed
+def get_database_schema():
+    return _db.get_schema()
 
-def _get_schema_handler(args: dict) -> dict:
-    return {"content": [{"type": "text", "text": get_database_schema()}]}
+def execute_sql_query(query: str, explanation: str = ""):
+    return _db.execute_query(query)
 
-
-def _execute_query_handler(args: dict) -> dict:
-    result = execute_sql_query(args["query"], args.get("explanation", ""))
-    return {"content": [{"type": "text", "text": result}]}
-
-
-SQL_SCHEMA_TOOL = {
-    "name": "get_database_schema",
-    "description": "Get database schema — all tables and columns. Call this first before any SQL query.",
-    "input_schema": {"type": "object", "properties": {}, "required": []},
-    "handler": _get_schema_handler,
-}
-
-SQL_QUERY_TOOL = {
-    "name": "execute_sql_query",
-    "description": "Execute a safe SQL SELECT query on the sales database. Returns rows, columns, and data preview.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {"type": "string", "description": "Valid SQL SELECT statement"},
-            "explanation": {"type": "string", "description": "What this query does"},
-        },
-        "required": ["query", "explanation"],
-    },
-    "handler": _execute_query_handler,
-}
-
-# For @beta_tool / tool_runner
-ALL_TOOLS = [get_database_schema, execute_sql_query]
-
-# For claude_agent_sdk MCP server
-ALL_MCP_TOOLS = [SQL_SCHEMA_TOOL, SQL_QUERY_TOOL]
+DB_TOOLS = [get_database_schema_mcp, execute_sql_query_mcp]

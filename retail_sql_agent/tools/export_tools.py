@@ -1,13 +1,12 @@
 """
 Export tools — save query results to CSV or JSON files.
-Standardized with @beta_tool for SDK orchestration.
+Standardized with @tool for SDK orchestration.
 """
 
 import json
 import os
 import sys
 from datetime import datetime
-from anthropic import beta_tool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.database_manager import DatabaseManager
@@ -20,14 +19,19 @@ def _ensure_db():
         _db.connect()
 
 
-@beta_tool
-def export_to_csv(query: str, filename: str = "") -> str:
-    """Export SQL query results to a CSV file.
+from claude_agent_sdk import tool
 
-    Args:
-        query: SQL SELECT query whose results to export.
-        filename: Optional output filename (e.g. top_products.csv).
-    """
+@tool(
+    name="export_to_csv",
+    description="Export SQL query results to a CSV file.",
+    input_schema={
+        "query": str,
+        "filename": str
+    }
+)
+async def export_to_csv_mcp(args: dict) -> dict:
+    query = args["query"]
+    filename = args.get("filename", "")
     _ensure_db()
     if not filename:
         filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -35,27 +39,33 @@ def export_to_csv(query: str, filename: str = "") -> str:
         filename += ".csv"
 
     try:
-        df = _db.execute_query(query)
+        # Note: We can reuse the internal implementation if we want, but keeping it direct for clarity
+        from tools.database_tools import execute_sql_query
+        df = execute_sql_query(query)
         filepath = os.path.abspath(filename)
         df.to_csv(filepath, index=False)
-        return json.dumps({
+        res = {
             "success": True, 
             "filepath": filepath, 
             "rows": len(df),
             "summary": f"Exported {len(df)} rows to {filename}"
-        })
+        }
+        return {"content": [{"type": "text", "text": json.dumps(res)}]}
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)})}]}
 
 
-@beta_tool
-def export_to_json(query: str, filename: str = "") -> str:
-    """Export SQL query results to a JSON file.
-
-    Args:
-        query: SQL SELECT query whose results to export.
-        filename: Optional output filename (e.g. sales_data.json).
-    """
+@tool(
+    name="export_to_json",
+    description="Export SQL query results to a JSON file.",
+    input_schema={
+        "query": str,
+        "filename": str
+    }
+)
+async def export_to_json_mcp(args: dict) -> dict:
+    query = args["query"]
+    filename = args.get("filename", "")
     _ensure_db()
     if not filename:
         filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -63,14 +73,19 @@ def export_to_json(query: str, filename: str = "") -> str:
         filename += ".json"
 
     try:
-        df = _db.execute_query(query)
+        from tools.database_tools import execute_sql_query
+        df = execute_sql_query(query)
         filepath = os.path.abspath(filename)
         df.to_json(filepath, orient="records", indent=2, default_handler=str)
-        return json.dumps({
+        res = {
             "success": True, 
             "filepath": filepath, 
             "rows": len(df),
             "summary": f"Exported {len(df)} rows to {filename}"
-        })
+        }
+        return {"content": [{"type": "text", "text": json.dumps(res)}]}
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
+        return {"content": [{"type": "text", "text": json.dumps({"success": False, "error": str(e)})}]}
+
+EXPORT_TOOLS = [export_to_csv_mcp, export_to_json_mcp]
+

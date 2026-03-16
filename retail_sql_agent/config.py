@@ -45,7 +45,7 @@ logger = setup_logging()
 class Config:
     """Application configuration from environment variables."""
 
-    # Anthropic API
+    # Claude Agent SDK Configuration
     MODEL: str = os.getenv("MODEL_NAME", "claude-3-haiku-20240307")
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4096"))
     MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "2"))

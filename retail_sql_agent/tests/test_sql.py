@@ -1,8 +1,6 @@
-"""
-Standalone toolkit test — verifies database connection and tools
-work correctly without calling the Claude API.
-"""
-
+import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tools.database_tools import initialize_tools, get_database_schema, execute_sql_query, cleanup_tools
 
 
