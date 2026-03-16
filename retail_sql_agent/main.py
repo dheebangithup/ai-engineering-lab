@@ -31,8 +31,15 @@ agent = RetailAgent()
 
 
 @app.get("/stream")
-async def stream_agent(question: str):
-    logger.info(f"Received question: {question}")
+async def stream_agent(question: str, session_id: str = None):
+    logger.info(f"Received question: {question} (Session: {session_id})")
+    
+    # Update agent's session_id if provided
+    if session_id:
+        agent.session_id = session_id
+    elif not agent.session_id:
+        # If no session_id is active, the SDK will create one in stream_ask
+        pass
     """
     SSE Endpoint that streams agent flow events.
     Events: text, tool_start, tool_result, error
@@ -54,6 +61,22 @@ async def reset_agent():
     logger.info("Resetting agent conversation history.")
     agent.reset_conversation()
     return {"status": "success", "message": "Conversation history cleared."}
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """Returns a list of all saved sessions."""
+    return {"status": "success", "sessions": agent.session_manager.list_sessions()}
+
+@app.get("/api/session/{session_id}")
+async def get_session_history(session_id: str):
+    """Returns the full history for a specific session."""
+    session_data = agent.session_manager.get_session(session_id)
+    if not session_data:
+        return {"status": "error", "message": "Session not found."}
+    
+    # Set the active session_id so the user can continue this conversation
+    agent.session_id = session_id
+    return {"status": "success", "session": session_data}
 
 @app.get("/skills")
 async def get_skills():

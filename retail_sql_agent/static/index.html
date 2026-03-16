@@ -10,14 +10,33 @@
 
 <body>
     <header>
-        <h1>📊 SQL Analyst <span>Agent</span></h1>
+        <h1>📊 Retail SQL <span>Agent</span></h1>
         <div class="actions">
-            <button id="reset-btn"
-                style="background: var(--card-bg); border: 1px solid var(--border-color);">Reset</button>
+            <div id="status-badge"
+                style="font-size: 0.75rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.4rem;">
+                <span style="width: 8px; height: 8px; background: #238636; border-radius: 50%;"></span>
+                Connected
+            </div>
         </div>
     </header>
 
     <div class="main-container">
+        <!-- Sidebar for History -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <button class="new-chat-btn" id="new-chat-btn">
+                    <span>+</span> New Chat
+                </button>
+            </div>
+            <div
+                style="padding: 1rem 1.5rem 0.5rem; font-size: 0.7rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">
+                Recent Conversations
+            </div>
+            <div id="history-list" class="history-list">
+                <!-- History items injected here -->
+            </div>
+        </aside>
+
         <!-- Chat Area -->
         <section class="chat-section">
             <div id="chat-history">
@@ -58,9 +77,11 @@
         const userInput = document.getElementById('user-input');
         const flowContainer = document.getElementById('flow-container');
         const sendBtn = document.getElementById('send-btn');
-        const resetBtn = document.getElementById('reset-btn');
+        const newChatBtn = document.getElementById('new-chat-btn');
+        const historyList = document.getElementById('history-list');
 
         let currentAssistantMsgElement = null;
+        let currentSessionId = null;
 
         function addMessage(text, role) {
             const div = document.createElement('div');
@@ -117,13 +138,17 @@
 
             sendBtn.disabled = true;
 
-            const url = `/stream?question=${encodeURIComponent(question)}`;
+            const url = `/stream?question=${encodeURIComponent(question)}${currentSessionId ? `&session_id=${currentSessionId}` : ''}`;
             const eventSource = new EventSource(url);
 
             eventSource.onmessage = (event) => {
                 const data = JSON.parse(event.data);
 
-                if (data.type === 'text') {
+                if (data.type === 'session_id') {
+                    currentSessionId = data.content;
+                    loadSessions(); // Refresh sidebar to show the new/updated title
+                }
+                else if (data.type === 'text') {
                     currentAssistantMsgElement.textContent += data.content;
                     chatHistory.scrollTop = chatHistory.scrollHeight;
                 }
@@ -206,11 +231,128 @@
             // eventSource doesn't have a built-in 'complete' event, it just errors or we can send a custom event.
         };
 
-        resetBtn.onclick = async () => {
+        async function loadSessions() {
+            try {
+                const res = await fetch('/api/sessions');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    historyList.innerHTML = '';
+                    data.sessions.forEach(session => {
+                        const item = document.createElement('div');
+                        item.className = `history-item ${session.id === currentSessionId ? 'active' : ''}`;
+                        item.innerHTML = `<span style="margin-right: 0.5rem; opacity: 0.7;">💬</span> ${session.title}`;
+                        item.onclick = () => loadSessionHistory(session.id);
+                        historyList.appendChild(item);
+                    });
+                }
+            } catch (e) {
+                console.error('Failed to load sessions', e);
+            }
+        }
+
+        async function loadSessionHistory(sessionId) {
+            if (sessionId === currentSessionId) return;
+
+            try {
+                const res = await fetch(`/api/session/${sessionId}`);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    currentSessionId = sessionId;
+                    chatHistory.innerHTML = '';
+                    flowContainer.innerHTML = '';
+                    document.getElementById('active-skills').innerHTML = '';
+
+                    data.session.history.forEach(event => {
+                        renderEvent(event);
+                    });
+
+                    loadSessions(); // Refresh active state
+                }
+            } catch (e) {
+                console.error('Failed to load session history', e);
+            }
+        }
+
+        function renderEvent(data) {
+            if (data.type === 'user_question') {
+                addMessage(data.content, 'user');
+            }
+            else if (data.type === 'text') {
+                // Check if the previous message was assistant text to append
+                const messages = chatHistory.querySelectorAll('.assistant-message');
+                if (messages.length > 0 && data.append !== false) {
+                    const lastMsg = messages[messages.length - 1];
+                    lastMsg.textContent += data.content;
+                } else {
+                    addMessage(data.content, 'assistant');
+                }
+                chatHistory.scrollTop = chatHistory.scrollHeight;
+            }
+            else if (data.type === 'active_skills') {
+                const skillsContainer = document.getElementById('active-skills');
+                if (skillsContainer.innerHTML.trim() === '') {
+                    skillsContainer.innerHTML = '<span style="font-size: 0.75rem; color: var(--text-secondary);">Using Skills:</span>';
+                }
+                data.content.forEach(skill => {
+                    const existingBadges = Array.from(skillsContainer.getElementsByClassName('skill-badge'));
+                    if (!existingBadges.find(b => b.textContent === skill)) {
+                        const badge = document.createElement('span');
+                        badge.className = 'skill-badge';
+                        badge.textContent = skill;
+                        skillsContainer.appendChild(badge);
+                    }
+                });
+            }
+            else if (data.type === 'tool_start') {
+                let type = 'TOOL';
+                let content = `Calling ${data.name}...`;
+                let extra = data.args;
+                if (data.name === 'execute_sql_query') {
+                    type = 'SQL';
+                    content = data.args.explanation || 'Executing query';
+                    extra = data.args.query;
+                }
+                addFlowStep(type, content, extra);
+            }
+            else if (data.type === 'tool_result') {
+                const steps = flowContainer.querySelectorAll('.flow-step');
+                if (steps.length > 0) {
+                    const lastStep = steps[steps.length - 1];
+                    const resultTitle = document.createElement('div');
+                    resultTitle.style.marginTop = '0.5rem';
+                    resultTitle.style.fontSize = '0.75rem';
+                    resultTitle.style.color = 'var(--accent-color)';
+                    resultTitle.textContent = 'Result:';
+                    const pre = document.createElement('pre');
+                    pre.style.marginTop = '0.25rem';
+                    pre.style.maxHeight = '200px';
+                    pre.style.overflowY = 'auto';
+                    pre.style.fontSize = '0.7rem';
+                    try {
+                        const parsed = JSON.parse(data.result);
+                        pre.textContent = JSON.stringify(parsed, null, 2);
+                    } catch (e) {
+                        pre.textContent = data.result;
+                    }
+                    lastStep.appendChild(resultTitle);
+                    lastStep.appendChild(pre);
+                    flowContainer.scrollTop = flowContainer.scrollHeight;
+                }
+            }
+        }
+
+        newChatBtn.onclick = async () => {
             await fetch('/reset', { method: 'POST' });
-            chatHistory.innerHTML = '<div class="message assistant-message">History cleared. How can I help?</div>';
+            currentSessionId = null;
+            chatHistory.innerHTML = '<div class="message assistant-message">New conversation started. How can I help?</div>';
             flowContainer.innerHTML = '';
             document.getElementById('active-skills').innerHTML = '';
+            loadSessions();
+        };
+
+        // Initial load
+        window.onload = () => {
+            loadSessions();
         };
     </script>
 </body>

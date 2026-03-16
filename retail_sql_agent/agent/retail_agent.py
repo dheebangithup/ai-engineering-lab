@@ -19,6 +19,7 @@ from claude_agent_sdk.types import AssistantMessage, UserMessage, TextBlock, Too
 
 from tools.database_tools import DB_TOOLS, initialize_tools, cleanup_tools
 from tools.export_tools import EXPORT_TOOLS
+from core.session_manager import SessionManager
 from config import Config, logger
 
 class RetailAgent:
@@ -32,12 +33,12 @@ class RetailAgent:
         
         initialize_tools()
         
-        # We create a native SDK MCP server to wrap our tools
         self.mcp_config = create_sdk_mcp_server(
             name="retail",
             version="1.0.0",
             tools=DB_TOOLS + EXPORT_TOOLS
         )
+        self.session_manager = SessionManager()
 
     @property
     def loaded_skills(self) -> list[str]:
@@ -65,18 +66,29 @@ class RetailAgent:
             resume=self.session_id  # Use native SDK session resuming
         )
 
+        # Record user question
+        if self.session_id:
+            self.session_manager.add_event(self.session_id, {"type": "user_question", "content": question})
+
         try:
             tool_use_map = {} 
             
             async for message in query(prompt=question, options=options):
                 # Capture session_id from any message that has it
                 if hasattr(message, "session_id") and message.session_id:
-                    self.session_id = message.session_id
+                    if self.session_id != message.session_id:
+                        self.session_id = message.session_id
+                        yield {"type": "session_id", "content": self.session_id}
+                        # Now that we have an ID, record the question if it wasn't recorded
+                        self.session_manager.create_or_update_session(self.session_id)
+                        self.session_manager.add_event(self.session_id, {"type": "user_question", "content": question})
 
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             chunk_text = block.text
+                            if self.session_id:
+                                self.session_manager.add_event(self.session_id, {"type": "text", "content": chunk_text})
                             yield {"type": "text", "content": chunk_text}
                             
                             # Check active skills for UI highlighting
@@ -84,18 +96,27 @@ class RetailAgent:
                             acc_lower = chunk_text.lower()
                             active = [s for s in skills if s.lower() in acc_lower or s.replace(" ", "-").lower() in acc_lower]
                             if active:
-                                yield {"type": "active_skills", "content": list(set(active))}
+                                active_list = list(set(active))
+                                if self.session_id:
+                                    self.session_manager.add_event(self.session_id, {"type": "active_skills", "content": active_list})
+                                yield {"type": "active_skills", "content": active_list}
                                 
                         elif isinstance(block, ToolUseBlock):
                             display_name = block.name.replace("mcp__retail__", "")
                             tool_use_map[block.id] = display_name
-                            yield {"type": "tool_start", "name": display_name, "args": block.input}
+                            event = {"type": "tool_start", "name": display_name, "args": block.input}
+                            if self.session_id:
+                                self.session_manager.add_event(self.session_id, event)
+                            yield event
                             
                 elif isinstance(message, UserMessage):
                     for block in message.content:
                         if isinstance(block, ToolResultBlock):
                             name = tool_use_map.get(block.tool_use_id, "Tool")
-                            yield {"type": "tool_result", "name": name, "result": block.content}
+                            event = {"type": "tool_result", "name": name, "result": block.content}
+                            if self.session_id:
+                                self.session_manager.add_event(self.session_id, event)
+                            yield event
                             
         except Exception as e:
             logger.error(f"Agent Error: {str(e)}", exc_info=True)

@@ -84,7 +84,6 @@ sql_agent/
 ### 👔 Executive Business Intelligence (KPIs)
 - **Business health:** "Give me an executive summary of our overall business health over the last 90 days."
 - **AOV metrics:** "Calculate our Average Order Value (AOV) and total revenue for the current quarter."
-- **Customer metrics:** "Which customers have joined in the last year and have over 400 loyalty points?"
 
 ### 🔮 Forecasting & Inventory Management
 - **Stock warnings:** "Show me all products with a 'stock_level' below their 'reorder_point'. Which supplier should I contact for each?"
