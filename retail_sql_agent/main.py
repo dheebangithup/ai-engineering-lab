@@ -12,8 +12,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from agent.retail_agent import RetailAgent
 from config import logger
+
+class RenameRequest(BaseModel):
+    title: str
 
 app = FastAPI(title="SQL Analyst Agent API")
 
@@ -77,6 +81,14 @@ async def get_session_history(session_id: str):
     # Set the active session_id so the user can continue this conversation
     agent.session_id = session_id
     return {"status": "success", "session": session_data}
+
+@app.post("/api/session/{session_id}/rename")
+async def rename_session(session_id: str, request: RenameRequest):
+    """Renames a session."""
+    success = agent.session_manager.rename_session(session_id, request.title)
+    if not success:
+        return {"status": "error", "message": "Session not found."}
+    return {"status": "success", "title": request.title}
 
 @app.get("/skills")
 async def get_skills():

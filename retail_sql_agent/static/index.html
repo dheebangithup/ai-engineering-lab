@@ -240,13 +240,50 @@
                     data.sessions.forEach(session => {
                         const item = document.createElement('div');
                         item.className = `history-item ${session.id === currentSessionId ? 'active' : ''}`;
-                        item.innerHTML = `<span style="margin-right: 0.5rem; opacity: 0.7;">💬</span> ${session.title}`;
-                        item.onclick = () => loadSessionHistory(session.id);
+
+                        const titleSpan = document.createElement('span');
+                        titleSpan.style.flex = '1';
+                        titleSpan.style.overflow = 'hidden';
+                        titleSpan.style.textOverflow = 'ellipsis';
+                        titleSpan.style.whiteSpace = 'nowrap';
+                        titleSpan.innerHTML = `<span style="margin-right: 0.5rem; opacity: 0.7;">💬</span> ${session.title}`;
+                        titleSpan.onclick = () => loadSessionHistory(session.id);
+
+                        const editBtn = document.createElement('button');
+                        editBtn.className = 'rename-btn';
+                        editBtn.innerHTML = '✎';
+                        editBtn.title = 'Rename';
+                        editBtn.onclick = (e) => {
+                            e.stopPropagation();
+                            promptRename(session.id, session.title);
+                        };
+
+                        item.appendChild(titleSpan);
+                        item.appendChild(editBtn);
                         historyList.appendChild(item);
                     });
                 }
             } catch (e) {
                 console.error('Failed to load sessions', e);
+            }
+        }
+
+        async function promptRename(sessionId, currentTitle) {
+            const newTitle = prompt('Enter new title:', currentTitle);
+            if (!newTitle || newTitle === currentTitle) return;
+
+            try {
+                const res = await fetch(`/api/session/${sessionId}/rename`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: newTitle })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    loadSessions();
+                }
+            } catch (e) {
+                console.error('Failed to rename session', e);
             }
         }
 
@@ -279,9 +316,10 @@
             }
             else if (data.type === 'text') {
                 // Check if the previous message was assistant text to append
-                const messages = chatHistory.querySelectorAll('.assistant-message');
-                if (messages.length > 0 && data.append !== false) {
-                    const lastMsg = messages[messages.length - 1];
+                const messages = chatHistory.querySelectorAll('.message');
+                const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
+
+                if (lastMsg && lastMsg.classList.contains('assistant-message') && data.append !== false) {
                     lastMsg.textContent += data.content;
                 } else {
                     addMessage(data.content, 'assistant');

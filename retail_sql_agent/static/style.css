@@ -63,11 +63,12 @@
     border-radius: 6px;
     font-size: 0.875rem;
     cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     color: var(--text-secondary);
     transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
 }
 
 .history-item:hover {
@@ -80,6 +81,32 @@
     background: #21262d;
     color: var(--text-primary);
     border-left: 2px solid var(--accent-color);
+}
+
+.rename-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.65rem;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.history-item:hover .rename-btn {
+    opacity: 1;
+}
+
+.rename-btn:hover {
+    color: var(--accent-color);
+    background: rgba(88, 166, 255, 0.1);
+    border-radius: 4px;
 }
 
 * {

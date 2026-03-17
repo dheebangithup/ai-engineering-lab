@@ -75,6 +75,14 @@ class SessionManager:
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         return self.sessions.get(session_id)
 
+    def rename_session(self, session_id: str, new_title: str):
+        if session_id in self.sessions:
+            self.sessions[session_id]["title"] = new_title
+            self.sessions[session_id]["updated_at"] = time.time()
+            self._save_sessions()
+            return True
+        return False
+
     def delete_session(self, session_id: str):
         if session_id in self.sessions:
             del self.sessions[session_id]
