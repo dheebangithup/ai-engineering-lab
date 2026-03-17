@@ -4,12 +4,14 @@ An enterprise-ready SQL data analyst agent fully built with the **Claude Agent S
 
 Ask natural language questions about your retail data — the agent automatically inspects the database schema, writes optimized SQL, executes it, and provides business insights. Featuring a **premium multi-session dashboard** to visualize the agent's internal reasoning and history.
 
+![Retail Agent Showcase](retail_agent.gif)
+
 ---
 
 ## 🌟 Key Highlights
 
 - 🧠 **Claude Agent SDK Native** — Leverages the latest SDK for robust tool orchestration and modular Skills deployment.
-- 🕒 **Multi-Session History** — ChatGPT-like sidebar to manage multiple persistent analysis threads (Auto-saved to `sessions.json`).
+- 🕒 **Multi-Session History** — ChatGPT-like sidebar to manage multiple analysis threads with **Manual Renaming** support (Auto-saved to `sessions.json`).
 - ⚡ **Real-time Flow Visualizer** — Transparent "behind-the-scenes" view of skill activation, tool calls, and SQL generation.
 - 💰 **Built for Scale & Savings** — Optimized for token efficiency via Skill-Layer Caching and Progressive Disclosure.
 - 🛡️ **Safety-First Design** — Read-only SQL enforcement and dangerous keyword filtering via MCP server.
