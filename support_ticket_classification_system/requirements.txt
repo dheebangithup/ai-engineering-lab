@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+
+# LLM + Workflow
+langchain
+langgraph
+langchain-nvidia-ai-endpoints
+
+# Validation & Schema
+pydantic
+
+# Env Management
+python-dotenv
+
+# Optional but recommended
+httpx
