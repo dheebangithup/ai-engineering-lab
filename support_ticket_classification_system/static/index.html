@@ -7,11 +7,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #6366f1;
-            --bg: #0f172a;
-            --card: #1e293b;
-            --text: #f8fafc;
-            --accent: #38bdf8;
+            --primary: #226DB4;
+            --bg: #FFFFFF;
+            --card: #F8F9FA;
+            --text: #2C3E50;
+            --accent: #E42527;
+            --secondary: #089949;
+            --warning: #F9B21D;
         }
         body {
             font-family: 'Inter', sans-serif;
@@ -28,34 +30,37 @@
             max-width: 800px;
             background: var(--card);
             padding: 2rem;
-            border-radius: 1rem;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            border: 1px solid #E5E7EB;
         }
-        h1 { text-align: center; color: var(--accent); margin-bottom: 2rem; }
+        h1 { text-align: center; color: var(--primary); margin-bottom: 2rem; font-weight: 600; }
         .samples { display: flex; gap: 10px; margin-bottom: 1.5rem; flex-wrap: wrap; }
         .sample-btn {
-            background: #334155;
-            border: 1px solid #475569;
-            color: white;
+            background: #FFFFFF;
+            border: 1px solid #D1D5DB;
+            color: var(--text);
             padding: 8px 16px;
-            border-radius: 20px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 0.85rem;
             transition: all 0.2s;
+            font-weight: 500;
         }
-        .sample-btn:hover { background: var(--primary); }
+        .sample-btn:hover { background: var(--primary); color: white; border-color: var(--primary); }
         textarea {
             width: 100%;
             height: 120px;
-            background: #0f172a;
-            border: 1px solid #334155;
-            color: white;
+            background: #FFFFFF;
+            border: 1px solid #D1D5DB;
+            color: var(--text);
             padding: 1rem;
-            border-radius: 0.5rem;
+            border-radius: 6px;
             font-size: 1rem;
             resize: none;
             box-sizing: border-box;
             margin-bottom: 1rem;
+            font-family: 'Inter', sans-serif;
         }
         button#submit {
             width: 100%;
@@ -63,17 +68,20 @@
             color: white;
             border: none;
             padding: 1rem;
-            border-radius: 0.5rem;
+            border-radius: 6px;
             font-weight: 600;
             cursor: pointer;
-            transition: opacity 0.2s;
+            transition: all 0.2s;
+            font-size: 1rem;
         }
-        button#submit:disabled { opacity: 0.5; cursor: not-allowed; }
+        button#submit:hover { background: #1E5A9C; }
+        button#submit:disabled { opacity: 0.5; cursor: not-allowed; background: #9CA3AF; }
         #result {
             margin-top: 2rem;
             padding: 1rem;
-            background: #0f172a;
-            border-radius: 0.5rem;
+            background: #FFFFFF;
+            border: 1px solid #E5E7EB;
+            border-radius: 6px;
             display: none;
         }
         .result-grid {
@@ -81,12 +89,12 @@
             grid-template-columns: 1fr 1fr;
             gap: 1rem;
         }
-        .label { color: #94a3b8; font-size: 0.8rem; text-transform: uppercase; }
+        .label { color: #6B7280; font-size: 0.8rem; text-transform: uppercase; font-weight: 500; }
         .value { font-weight: 600; font-size: 1.1rem; }
         .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
-        .tag-safe { background: #059669; }
-        .tag-danger { background: #dc2626; }
-        .cost { font-family: monospace; color: #10b981; font-size: 0.8rem; margin-top: 10px; border-top: 1px solid #334155; padding-top: 10px; }
+        .tag-safe { background: var(--secondary); color: white; }
+        .tag-danger { background: var(--accent); color: white; }
+        .cost { font-family: monospace; color: #6B7280; font-size: 0.8rem; margin-top: 10px; border-top: 1px solid #E5E7EB; padding-top: 10px; }
     </style>
 </head>
 <body>
