@@ -8,6 +8,10 @@ class EmbeddingProvider(ABC):
     def embed(self,chunks:list[Document])->list[EmbeddedDocument]:
         pass
 
+    @abstractmethod
+    def embed_query(self, query: str) -> list[float]:
+        pass
+
     @property
     @abstractmethod
     def dimension(self) -> int:

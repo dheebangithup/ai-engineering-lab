@@ -31,9 +31,10 @@ class QdrantStore(VectorStore):
 
     @override
     def search(self, request: SearchRequest) -> SearchResponse:
+        query_vector = self.__embedding_provider.embed_query(request.query)
         response=self.__client.query_points(
             collection_name=app_settings.COLLECTION_NAME,
-            query=request.query,
+            query=query_vector,
             limit=request.top_k
         )
         if response.points is None:

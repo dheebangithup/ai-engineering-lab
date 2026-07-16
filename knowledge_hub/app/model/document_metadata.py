@@ -1,19 +1,18 @@
-
 from dataclasses import dataclass, asdict, field
 from typing import Optional
 
-from knowledge_hub.app.enums import FileType,ParserType
+from knowledge_hub.app.enums import FileType, ParserType
 
 
 @dataclass
 class DocumentMetadata:
     doc_id: str
     source: str
-    file_name: str
+    file_name:str
     file_type: FileType
-    page_number: int
+    parser: ParserType
+    page_number: Optional[int] = None
     chunk_id: Optional[str] = None
-    parser: ParserType = None
     has_image: bool = False
     has_table: bool = False
     table_as_html: list[str] = field(default_factory=list)
@@ -33,11 +32,11 @@ class DocumentMetadata:
     @classmethod
     def from_dict(cls, data: dict) -> "DocumentMetadata":
         return cls(
-            doc_id=data["doc_id"],
+            doc_id=data.get("doc_id"),
             chunk_id=data.get("chunk_id"),
-            source=data["source"],
-            file_name=data["file_name"],
-            file_type=FileType(data["file_type"]) if isinstance(data["file_type"], str) else data["file_type"],
+            source=data.get("source"),
+            file_name=data.get("file_name"),
+            file_type=FileType(data["file_type"]) if data.get("file_type") and isinstance(data["file_type"], str) else data.get("file_type"),
             page_number=data.get("page_number"),
             parser=ParserType(data["parser"]) if data.get("parser") else None,
             has_image=data.get("has_image", False),

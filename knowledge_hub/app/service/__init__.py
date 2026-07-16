@@ -1,2 +1,3 @@
 from .ingestion_service import IngestionService
 from .document_metadata_service import DocumentMetaDataService
+from .retrieval_service import RetrievalService

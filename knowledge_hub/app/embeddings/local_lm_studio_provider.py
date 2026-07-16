@@ -58,6 +58,17 @@ class LocalLMStudioEmbeddingProvider(EmbeddingProvider):
 
         return embedded_docs
 
+    @override
+    def embed_query(self, query: str) -> list[float]:
+        app_logger.info(f"Embedding query text: '{query}'")
+        try:
+            embedding = self.__embeddings_client.embed_query(query)
+            app_logger.info("Query text embedded successfully.")
+            return embedding
+        except Exception as e:
+            app_logger.error(f"Error occurred while embedding query '{query}'", exc_info=True)
+            raise e
+
 
 
 
