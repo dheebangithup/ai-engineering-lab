@@ -8,3 +8,5 @@ venv/**
 .env
 /**/.env
 /.env
+knowledge_hub/data/*
+knowledge_hub/.env

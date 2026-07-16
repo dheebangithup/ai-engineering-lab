@@ -1,0 +1,37 @@
+# Core framework
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+
+# Vector DB
+qdrant-client==1.9.0
+
+# LLM orchestration
+langchain==0.2.12
+langchain_openai
+
+#postgresql
+sqlalchemy psycopg[binary]
+
+
+
+
+
+
+llama-index==0.10.30
+
+# Parsing / document loaders
+llama-parse==0.3.0
+unstructured==0.15.0
+
+# Embeddings (choose one or both)
+sentence-transformers==3.0.1   # for local embedding models
+
+# Database (metadata store)
+psycopg2-binary==2.9.9
+
+# Evaluation / monitoring
+langsmith==0.1.30
+ragas==0.1.9
+
+# Docker SDK (if you plan to manage containers programmatically)
+docker==7.1.0
