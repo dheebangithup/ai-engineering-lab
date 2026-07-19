@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+from uuid import UUID
+
+from sqlalchemy import Uuid
 
 from knowledge_hub.app.model import Document
 
@@ -114,6 +117,6 @@ class HashUtil:
             doc_id: str,
             page_num: int,
             chunk_index:int
-    ) -> str:
+    ) -> UUID:
         import uuid
-        return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{doc_id}_P{page_num}_C{chunk_index}"))
+        return uuid.uuid5(uuid.NAMESPACE_DNS, f"{doc_id}_P{page_num}_C{chunk_index}")

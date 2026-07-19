@@ -31,3 +31,23 @@ class VectorStore(ABC):
         Perform similarity search.
         """
         pass
+
+    @abstractmethod
+    def delete(
+        self,
+        chunk_ids: list[str],
+    ) -> None:
+        """
+        Delete vectors by chunk_ids.
+        """
+        pass
+
+    @abstractmethod
+    def delete_by_document(
+        self,
+        document_id: str,
+    ) -> None:
+        """
+        Delete all vectors for a document.
+        """
+        pass

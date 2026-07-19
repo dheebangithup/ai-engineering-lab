@@ -16,3 +16,18 @@ class DocumentProcessor(ABC):
         steps 3: generate chunk id and set into metadata
         '''
         pass
+
+    @abstractmethod
+    def get_config(self) -> dict:
+        """
+        Get processor configuration settings.
+        """
+        pass
+
+    @abstractmethod
+    def compare_config(self, old_config: dict) -> bool:
+        """
+        Compare the current processor configuration with the old configuration.
+        Returns True if configuration has changed, False otherwise.
+        """
+        pass

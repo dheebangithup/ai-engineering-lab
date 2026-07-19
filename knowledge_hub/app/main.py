@@ -1,8 +1,11 @@
 import logging
 import os
 import uvicorn
+import tempfile
+import shutil
+from typing import Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -125,39 +128,62 @@ async def root():
     status_code=status.HTTP_200_OK,
     tags=["Ingestion"],
     summary="Ingest a document file",
-    description="Parses, chunks, embeds, and indexes a local document file into the vector store and relational metadata database."
+    description="Parses, chunks, embeds, and indexes an uploaded document file into the vector store and relational metadata database."
 )
 async def ingest_document(
-    request: IngestRequest,
+    file: UploadFile = File(..., description="The document file to upload"),
+    file_type: FileType = Form(FileType.PDF, description="The file format/type of the document (pdf, docx, md, image)."),
+    chunk_size: int = Form(500, description="Size of text chunks to split the document into.", ge=1, le=8192),
+    new_after_n_chars: int = Form(2400, description="Target size to start a new chunk.", ge=1),
+    combine_text_under_n_chars: int = Form(500, description="Threshold to combine tiny chunks.", ge=0),
+    strategy: str = Form("hi_res", description="Unstructured partitioning strategy (hi_res, fast, auto, ocr_only)."),
+    keep_table_as_html: bool = Form(False, description="Keep tables structured as HTML."),
+    doc_version: str = Form("1.0.0", description="Document version reference."),
+    doc_id: Optional[str] = Form(None, description="Optional document ID parameter."),
     db: Session = Depends(get_db),
     embedding_provider: LocalLMStudioEmbeddingProvider = Depends(get_embedding_provider),
     vector_store: QdrantStore = Depends(get_vector_store),
     metadata_service: DocumentMetaDataService = Depends(get_document_metadata_service)
 ):
-    app_logger.info(f"Ingestion Request received for path: '{request.file_path}' (type: {request.file_type.value})")
+    app_logger.info(f"Ingestion Request received for uploaded file: '{file.filename}' (content-type: {file.content_type}, type: {file_type.value}, version: {doc_version}, doc_id: {doc_id})")
 
-    # 1. Path Validation
-    abs_path = os.path.abspath(request.file_path)
-    app_logger.info(f"Resolved path '{request.file_path}' to absolute path: '{abs_path}'")
-    if not os.path.exists(abs_path):
-        app_logger.error(f"Validation Error: File does not exist at '{abs_path}'")
+    # 1. Validation
+    if not file.filename:
+        app_logger.error("Validation Error: Uploaded file has no filename.")
         return ResponseBuilder.failure(
-            message=f"File not found at: {request.file_path}",
-            error_code=status.HTTP_400_BAD_REQUEST
-        )
-    if not os.path.isfile(abs_path):
-        app_logger.error(f"Validation Error: Path is not a file: '{abs_path}'")
-        return ResponseBuilder.failure(
-            message=f"Provided path is not a file: {request.file_path}",
+            message="Uploaded file must have a valid filename.",
             error_code=status.HTTP_400_BAD_REQUEST
         )
 
-    # 2. Process Ingestion
+    temp_dir = None
     try:
+        # Create a unique temporary directory to store the uploaded file
+        temp_dir = tempfile.mkdtemp()
+        temp_file_path = os.path.join(temp_dir, file.filename)
+        app_logger.info(f"Created temporary directory '{temp_dir}' for processing '{file.filename}'")
+
+        # Write uploaded file content to the temp path in chunks
+        bytes_written = 0
+        with open(temp_file_path, "wb") as buffer:
+            while chunk := await file.read(1024 * 1024):  # 1MB chunk size
+                buffer.write(chunk)
+                bytes_written += len(chunk)
+
+        app_logger.info(f"Successfully saved uploaded file to '{temp_file_path}' ({bytes_written} bytes written)")
+
+        # Validate that the file is not empty
+        if bytes_written == 0:
+            app_logger.error(f"Validation Error: Uploaded file '{file.filename}' is empty (0 bytes).")
+            return ResponseBuilder.failure(
+                message=f"Uploaded file '{file.filename}' is empty.",
+                error_code=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 2. Process Ingestion
         from knowledge_hub.app.processor.unstructured_processor import UnStructuredProcessor
         from unstructured.partition.utils.constants import PartitionStrategy
 
-        app_logger.info(f"Initializing UnStructuredProcessor: strategy={request.strategy}, keep_table_as_html={request.keep_table_as_html}, chunk_size={request.chunk_size}")
+        app_logger.info(f"Initializing UnStructuredProcessor: strategy={strategy}, keep_table_as_html={keep_table_as_html}, chunk_size={chunk_size}")
 
         strategy_map = {
             "hi_res": PartitionStrategy.HI_RES,
@@ -165,14 +191,14 @@ async def ingest_document(
             "ocr_only": PartitionStrategy.OCR_ONLY,
             "auto": PartitionStrategy.AUTO
         }
-        strategy_enum = strategy_map.get(request.strategy.lower(), PartitionStrategy.HI_RES)
+        strategy_enum = strategy_map.get(strategy.lower(), PartitionStrategy.HI_RES)
 
         processor = UnStructuredProcessor(
             strategyType=strategy_enum,
-            keepTableAsHtml=request.keep_table_as_html,
-            chunk_size=request.chunk_size,
-            new_after_n_chars=request.new_after_n_chars,
-            combine_text_under_n_chars=request.combine_text_under_n_chars
+            keepTableAsHtml=keep_table_as_html,
+            chunk_size=chunk_size,
+            new_after_n_chars=new_after_n_chars,
+            combine_text_under_n_chars=combine_text_under_n_chars
         )
 
         ingestion_service = IngestionService(
@@ -182,8 +208,8 @@ async def ingest_document(
             meta_data_service=metadata_service
         )
 
-        app_logger.info(f"Running Ingestion pipeline for: '{abs_path}'")
-        doc_meta = ingestion_service.ingest(abs_path, request.file_type)
+        app_logger.info(f"Running Ingestion pipeline for: '{temp_file_path}' (doc_version: {doc_version}, doc_id: {doc_id})")
+        doc_meta = ingestion_service.ingest(temp_file_path, file_type, doc_version, doc_id)
 
         app_logger.info(f"Ingestion pipeline completed successfully. Generated Document ID: {doc_meta.document_id}")
 
@@ -199,11 +225,19 @@ async def ingest_document(
             message="Document ingestion completed successfully"
         )
     except Exception as e:
-        app_logger.error(f"Ingestion pipeline failed for file '{request.file_path}'", exc_info=True)
+        app_logger.error(f"Ingestion pipeline failed for uploaded file '{file.filename}'", exc_info=True)
         return ResponseBuilder.failure(
             message=f"Ingestion pipeline failed: {str(e)}",
             error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+    finally:
+        # Clean up temporary directory and files
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                app_logger.info(f"Successfully cleaned up temporary directory '{temp_dir}'")
+            except Exception as cleanup_err:
+                app_logger.warning(f"Failed to clean up temporary directory '{temp_dir}': {cleanup_err}", exc_info=True)
 
 @app.post(
     "/api/v1/search",
@@ -244,4 +278,9 @@ async def search_documents(
         )
 
 if __name__ == "__main__":
-    uvicorn.run('main:app', host="0.0.0.0", port=8000)
+        uvicorn.run(
+            "knowledge_hub.app.main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=False,
+        )

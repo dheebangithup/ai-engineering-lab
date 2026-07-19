@@ -1,5 +1,4 @@
-from abc import ABC
-from collections import defaultdict
+
 from typing import override
 
 from unstructured.chunking.title import chunk_by_title
@@ -33,6 +32,37 @@ class UnStructuredProcessor(DocumentProcessor):
             f"keepTableAsHtml={keepTableAsHtml}, chunk_size={chunk_size}, "
             f"new_after_n_chars={new_after_n_chars}, combine_text_under_n_chars={combine_text_under_n_chars}"
         )
+
+    @override
+    def get_config(self) -> dict:
+        return {
+            "parser_type": ParserType.UNSTRUCTURED.value,
+            "strategy": self.__strategyType.value if hasattr(self.__strategyType, 'value') else self.__strategyType,
+            "keep_table_as_html": self.__keepTableAsHtml,
+            "chunk_size": self.__chunk_size,
+            "new_after_n_chars": self.__new_after_n_chars,
+            "combine_text_under_n_chars": self.__combine_text_under_n_chars,
+        }
+
+    @override
+    def compare_config(self, old_config: dict) -> bool:
+        if not old_config:
+            app_logger.info("UnStructuredProcessor: No old configuration found. Treating as config changed to ensure it gets written.")
+            return True
+        
+        current_config = self.get_config()
+        config_keys_to_compare = [
+            "strategy",
+            "chunk_size",
+            "new_after_n_chars",
+            "combine_text_under_n_chars",
+            "parser_type"
+        ]
+        for key in config_keys_to_compare:
+            if current_config.get(key) != old_config.get(key):
+                app_logger.info(f"UnStructuredProcessor: Config difference detected for key '{key}'. Old: {old_config.get(key)}, New: {current_config.get(key)}")
+                return True
+        return False
 
     def __create_elements(self, file_path: str) -> list[Element]:
         app_logger.info(f"UnStructuredProcessor: Executing partition_pdf for '{file_path}' using strategy={self.__strategyType.value if hasattr(self.__strategyType, 'value') else self.__strategyType}.")
@@ -98,6 +128,7 @@ class UnStructuredProcessor(DocumentProcessor):
                     source=file_path,
                     parser=ParserType.UNSTRUCTURED,
                     file_type=FileType.PDF,
+                    doc_version=metadata.doc_version,
                 )
 
                 if hasattr(chunk, 'metadata') and hasattr(chunk.metadata, 'orig_elements'):
@@ -124,6 +155,9 @@ class UnStructuredProcessor(DocumentProcessor):
                 # Generate deterministic chunk_id
                 page_num = doc_metadata.page_number if doc_metadata.page_number is not None else 1
                 doc_metadata.chunk_id = HashUtil.generate_chunk_id(doc_metadata.doc_id, page_num, i)
+                doc_metadata.chunk_index = i
+                doc_metadata.chunk_hash = HashUtil.generate_chunk_hash(chunk.text)
+                doc_metadata.doc_version=metadata.doc_version
 
                 document = Document(content=chunk.text, metadata=doc_metadata)
                 docs.append(document)

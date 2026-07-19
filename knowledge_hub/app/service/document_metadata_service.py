@@ -1,6 +1,8 @@
 from knowledge_hub.app.entity import DocumentMetaDataEntity,ChunkMetaDataEntity
 from knowledge_hub.app.repositories import DocumentMetaDataRepository
 from knowledge_hub.app.repositories.chunk_metadata_repository import ChunkMetaDataRepository
+from knowledge_hub.app.config import app_logger
+
 
 
 class DocumentMetaDataService:
@@ -45,3 +47,42 @@ class DocumentMetaDataService:
 
     def delete_chunk_by_page(self, document_id: str, page_number: int)->ChunkMetaDataEntity:
         return self.chunk_repo.delete_by_page(document_id, page_number)
+
+    def update_chunk(self, chunk: ChunkMetaDataEntity) -> ChunkMetaDataEntity:
+        try:
+            app_logger.info(f"DocumentMetaDataService: Request received to update chunk metadata with ID: {chunk.chunk_id if chunk else 'None'}")
+            if not chunk or chunk.chunk_id is None:
+                app_logger.error("DocumentMetaDataService: Validation failed - chunk or chunk_id is missing.")
+                raise ValueError("chunk and chunk_id must be provided.")
+            
+            updated_chunk = self.chunk_repo.update(chunk)
+            app_logger.info(f"DocumentMetaDataService: Successfully updated chunk metadata with ID: {chunk.chunk_id}")
+            return updated_chunk
+        except Exception as e:
+            app_logger.error(f"DocumentMetaDataService: Failed to update chunk metadata: {str(e)}", exc_info=True)
+            raise e
+
+    def update_chunks(self, chunks: list[ChunkMetaDataEntity]) -> list[ChunkMetaDataEntity]:
+        try:
+            app_logger.info(f"DocumentMetaDataService: Request received to bulk update {len(chunks)} chunk metadata records.")
+            for index, chunk in enumerate(chunks):
+                if not chunk or chunk.chunk_id is None:
+                    app_logger.error(f"DocumentMetaDataService: Validation failed - chunk at index {index} is missing or has no chunk_id.")
+                    raise ValueError(f"Each chunk must have a valid chunk_id. Error at index {index}.")
+            
+            updated_chunks = self.chunk_repo.update_all(chunks)
+            app_logger.info(f"DocumentMetaDataService: Successfully bulk updated {len(chunks)} chunk metadata records.")
+            return updated_chunks
+        except Exception as e:
+            app_logger.error(f"DocumentMetaDataService: Failed to bulk update chunk metadata: {str(e)}", exc_info=True)
+            raise e
+
+    def delete_chunks_by_ids(self, chunk_ids: list):
+        try:
+            app_logger.info(f"DocumentMetaDataService: Request received to delete {len(chunk_ids) if chunk_ids else 0} chunk metadata records.")
+            self.chunk_repo.delete_by_ids(chunk_ids)
+            app_logger.info("DocumentMetaDataService: Successfully processed deletion of chunk metadata records.")
+        except Exception as e:
+            app_logger.error(f"DocumentMetaDataService: Failed to delete chunk metadata: {str(e)}", exc_info=True)
+            raise e
+

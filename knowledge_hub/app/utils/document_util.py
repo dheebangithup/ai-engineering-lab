@@ -8,27 +8,7 @@ from knowledge_hub.app.utils.hash_util import HashUtil
 
 class DocumentUtil:
 
-    @staticmethod
-    def to_lang_chain_document(docs: list[Document]) -> list[LCDocument]:
-        return [LCDocument(page_content=doc.content, metadata=doc.metadata.to_dict()) for doc in docs]
 
-    @staticmethod
-    def to_document_from_lang_chain(docs: list[LCDocument], generate_chunk_id: bool = False) -> list[Document]:
-        if generate_chunk_id:
-            output_docs = []
-            for i, doc in enumerate(docs, start=1):
-                meta = DocumentMetadata.from_dict(doc.metadata)
-                meta.chunk_id = HashUtil.generate_chunk_id(meta.doc_id, meta.page_number, i)
-                output_docs.append(Document(
-                    content=doc.page_content,
-                    metadata=meta,
-                ))
-            return output_docs
-
-        return [Document(
-            content=doc.page_content,
-            metadata=DocumentMetadata.from_dict(doc.metadata),
-        ) for doc in docs]
 
 
     @staticmethod
@@ -41,6 +21,8 @@ class DocumentUtil:
             source=meta.source,
             file_name=meta.file_name,
             content=doc.content,
+            doc_version=meta.doc_version,
+            chuk_index=meta.chunk_index
 
         )
 

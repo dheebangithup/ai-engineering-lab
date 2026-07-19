@@ -21,12 +21,18 @@ class QdrantStore(VectorStore):
         self._ensure_collection()
 
     @override
-    def upsert(self, documents: list[EmbeddedDocument], ) -> None:
+    def upsert(self, documents: list[EmbeddedDocument]) -> None:
         try:
-            self.__client.upsert(collection_name=app_settings.COLLECTION_NAME,
-                                 points=list(map(lambda d: DocumentUtil.to_point(d), documents)))
+            if not documents or len(documents)==0:
+                app_logger.info("QdrantStore: Received empty list of documents to upsert. Skipping upsert operation.")
+                return
+            
+            app_logger.info(f"QdrantStore: Preparing to upsert {len(documents)} points to collection '{app_settings.COLLECTION_NAME}'")
+            points = list(map(lambda d: DocumentUtil.to_point(d), documents))
+            self.__client.upsert(collection_name=app_settings.COLLECTION_NAME, points=points)
+            app_logger.info(f"QdrantStore: Successfully upserted {len(documents)} points.")
         except Exception as e:
-            app_logger.error("Error upserting documents to Qdrant", exc_info=True)
+            app_logger.error("QdrantStore: Error upserting documents to Qdrant", exc_info=True)
             raise e
 
     @override
@@ -48,6 +54,56 @@ class QdrantStore(VectorStore):
             )
         app_logger.debug(f'search found {len(docs)} documents for query {request.query}')
         return SearchResponse(results=docs)
+
+    @override
+    def delete(self, chunk_ids: list[str]) -> None:
+        try:
+            if not chunk_ids:
+                app_logger.info("QdrantStore: No chunk IDs provided for deletion. Skipping delete operation.")
+                return
+            
+            app_logger.info(f"QdrantStore: Attempting to delete {len(chunk_ids)} points from collection '{app_settings.COLLECTION_NAME}'")
+            
+            from qdrant_client.http import models
+            self.__client.delete(
+                collection_name=app_settings.COLLECTION_NAME,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="chunk_id",
+                                match=models.MatchAny(any=[str(cid) for cid in chunk_ids]),
+                            ),
+                        ]
+                    )
+                ),
+            )
+            app_logger.info("QdrantStore: Successfully deleted points from Qdrant.")
+        except Exception as e:
+            app_logger.error("QdrantStore: Error deleting points from Qdrant", exc_info=True)
+            raise e
+
+    def delete_by_document(self, document_id: str) -> None:
+        try:
+            app_logger.info(f"QdrantStore: Deleting all points for document_id '{document_id}' from collection '{app_settings.COLLECTION_NAME}'")
+            from qdrant_client.http import models
+            self.__client.delete(
+                collection_name=app_settings.COLLECTION_NAME,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="document_id",
+                                match=models.MatchValue(value=str(document_id)),
+                            ),
+                        ]
+                    )
+                ),
+            )
+            app_logger.info("QdrantStore: Successfully deleted all points for document_id from Qdrant.")
+        except Exception as e:
+            app_logger.error(f"QdrantStore: Error deleting points for document_id '{document_id}' from Qdrant", exc_info=True)
+            raise e
 
     def _ensure_collection(self) -> None:
         """
