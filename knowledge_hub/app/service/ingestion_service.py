@@ -286,6 +286,17 @@ class IngestionService:
                     x for x in chunks 
                     if (x.metadata.page_number if x.metadata.page_number else 1) >= min_edited_page
                 ]
+
+                # Detailed breakdown logging for invalidation
+                reused_count = len(old_metadata) - len(orphaned_chunk_ids)
+                reused_range = f"pages 1-{min_edited_page-1}" if min_edited_page > 1 else "None"
+                app_logger.info(
+                    f"IngestionService: Invalidation breakdown -> "
+                    f"Reused chunks ({reused_range}): {reused_count}, "
+                    f"Deleted old chunks (pages {min_edited_page}+): {len(orphaned_chunk_ids)}, "
+                    f"New chunks to embed/upsert (pages {min_edited_page}+): {len(filtered_chunks)}, "
+                    f"Net chunk count change: {len(chunks) - len(old_metadata):+d}."
+                )
             # If no pages were edited (the entire document is unchanged)
             else:
                 filtered_chunks = []
