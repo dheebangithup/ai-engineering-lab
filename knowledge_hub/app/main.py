@@ -16,6 +16,7 @@ from knowledge_hub.app.embeddings import LocalLMStudioEmbeddingProvider
 from knowledge_hub.app.enums import FileType
 from knowledge_hub.app.repositories import DocumentMetaDataRepository, ChunkMetaDataRepository
 from knowledge_hub.app.service import IngestionService, DocumentMetaDataService, RetrievalService
+from knowledge_hub.app.service.retrieval_service import RetrievalResult
 from knowledge_hub.app.model import SearchRequest, SearchResponse
 from knowledge_hub.app.model.api_reponse import ApiResponse, ResponseBuilder
 
@@ -241,17 +242,17 @@ async def ingest_document(
 
 @app.post(
     "/api/v1/search",
-    response_model=ApiResponse[SearchResponse],
+    response_model=ApiResponse[RetrievalResult],
     status_code=status.HTTP_200_OK,
     tags=["Retrieval"],
-    summary="Search / Retrieve documents",
-    description="Performs semantic vector search using query embedding against Qdrant to retrieve relevant chunks."
+    summary="Search / Retrieve documents with ContextBuilder and Prompt Provisioning",
+    description="Performs semantic vector search against Qdrant, builds context via ContextBuilder pipeline, and provisions versioned prompt templates."
 )
 async def search_documents(
     request: SearchRequest,
     retrieval_service: RetrievalService = Depends(get_retrieval_service)
 ):
-    app_logger.info(f"Search Request received: query='{request.query}', top_k={request.top_k}")
+    app_logger.info(f"Search Request received: query='{request.query}', top_k={request.top_k}, prompt_name={request.prompt_name}")
 
     # 1. Validation
     if not request.query.strip():
@@ -264,9 +265,9 @@ async def search_documents(
     # 2. Process Search
     try:
         response = retrieval_service.search(request)
-        if response.success:
-            num_results = len(response.data.results) if response.data else 0
-            app_logger.info(f"Search succeeded for query: '{request.query}'. Found {num_results} results.")
+        if response.success and response.data:
+            num_chunks = response.data.built_context.chunk_count if response.data.built_context else 0
+            app_logger.info(f"Search succeeded for query: '{request.query}'. Assembled {num_chunks} context chunks.")
         else:
             app_logger.error(f"Search failed for query: '{request.query}'. Message: {response.message}")
         return response

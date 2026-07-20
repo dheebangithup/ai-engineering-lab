@@ -15,6 +15,9 @@ class AppSettings(BaseSettings):
 
     POSTGRES_URL: str = ''
 
-
+    # Context & Retrieval Settings
+    MAX_CONTEXT_TOKENS: int = 6000
+    DEFAULT_SCORE_THRESHOLD: float = 0.7
+    DEFAULT_TOP_K: int = 5
 
     model_config = SettingsConfigDict(env_file=BASE_DIR / ".env")
