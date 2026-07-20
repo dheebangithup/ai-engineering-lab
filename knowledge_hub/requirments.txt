@@ -8,6 +8,7 @@ qdrant-client==1.9.0
 # LLM orchestration
 langchain==0.2.12
 langchain_openai
+langchain_groq
 
 #postgresql
 sqlalchemy psycopg[binary]

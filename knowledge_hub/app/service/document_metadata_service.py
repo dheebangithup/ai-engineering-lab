@@ -35,9 +35,26 @@ class DocumentMetaDataService:
     def get_doc_by_hash(self, doc_hash: str)->DocumentMetaDataEntity:
         return self.doc_repo.find_by_hash(doc_hash)
 
+    def get_all_docs(self) -> list[DocumentMetaDataEntity]:
+        try:
+            app_logger.info("DocumentMetaDataService: Request received to fetch all document metadata entities.")
+            docs = self.doc_repo.find_all()
+            app_logger.info(f"DocumentMetaDataService: Successfully retrieved {len(docs)} documents.")
+            return docs
+        except Exception as e:
+            app_logger.error(f"DocumentMetaDataService: Failed to fetch all documents: {str(e)}", exc_info=True)
+            raise e
+
     def delete_doc_and_chunks(self, document_id: str):
-        self.chunk_repo.delete_by_document(document_id)
-        return self.doc_repo.delete(document_id)
+        try:
+            app_logger.info(f"DocumentMetaDataService: Request received to delete document and chunks for ID: {document_id}")
+            self.chunk_repo.delete_by_document(document_id)
+            deleted_doc = self.doc_repo.delete(document_id)
+            app_logger.info(f"DocumentMetaDataService: Successfully deleted document and chunks for ID: {document_id}")
+            return deleted_doc
+        except Exception as e:
+            app_logger.error(f"DocumentMetaDataService: Failed to delete document and chunks for ID {document_id}: {str(e)}", exc_info=True)
+            raise e
 
     def get_chunks_for_doc(self, document_id: str)->list[ChunkMetaDataEntity]:
         return self.chunk_repo.find_by_document(document_id)

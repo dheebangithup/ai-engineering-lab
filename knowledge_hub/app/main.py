@@ -3,9 +3,11 @@ import os
 import uvicorn
 import tempfile
 import shutil
-from typing import Optional
+from typing import Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -53,6 +55,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Mount Static Assets Directory
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+if not os.path.exists(STATIC_DIR):
+    os.makedirs(STATIC_DIR, exist_ok=True)
+
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 # Pydantic Schemas for API Documentation
 class IngestRequest(BaseModel):
     file_path: str = Field(
@@ -96,6 +105,17 @@ class IngestionResponseData(BaseModel):
     status: str = Field(..., description="Ingestion processing status (e.g., SUCCESS, FAILED).")
     total_pages: int | None = Field(None, description="Total number of pages parsed from the document.")
 
+class DocumentResponseData(BaseModel):
+    document_id: str = Field(..., description="Unique document ID")
+    file_name: str = Field(..., description="File name")
+    file_type: str = Field(..., description="File type")
+    file_hash: str = Field(..., description="File content hash")
+    status: str = Field(..., description="Processing status")
+    total_pages: Optional[int] = Field(None, description="Total page count")
+    doc_version: str = Field(..., description="Document version string")
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    chunk_count: int = Field(0, description="Total associated chunks")
+
 # Dependency Injection Providers
 def get_document_metadata_service(db: Session = Depends(get_db)) -> DocumentMetaDataService:
     return DocumentMetaDataService(
@@ -127,9 +147,86 @@ def get_retrieval_service(
 @app.get("/", tags=["General"])
 async def root():
     """
-    Root endpoint verifying server status and welcoming users.
+    Root endpoint serving the Enterprise RAG Web Portal UI or welcome JSON.
     """
+    index_file = os.path.join(STATIC_DIR, "index.html")
+    if os.path.exists(index_file):
+        app_logger.info("Serving Web Portal static UI (index.html)")
+        return FileResponse(index_file)
+    app_logger.info("Serving default API status response")
     return {"message": "Welcome to the Enterprise Knowledge Hub API"}
+
+@app.get(
+    "/api/v1/documents",
+    response_model=ApiResponse[List[DocumentResponseData]],
+    status_code=status.HTTP_200_OK,
+    tags=["Metadata"],
+    summary="List all uploaded documents",
+    description="Retrieves metadata for all ingested documents stored in the database."
+)
+async def list_documents(
+    metadata_service: DocumentMetaDataService = Depends(get_document_metadata_service)
+):
+    app_logger.info("API Endpoint: GET /api/v1/documents requested")
+    try:
+        docs = metadata_service.get_all_docs()
+        result = []
+        for doc in docs:
+            chunk_cnt = len(doc.chunks) if doc.chunks else 0
+            created_str = doc.created_at.isoformat() if doc.created_at else None
+            result.append(DocumentResponseData(
+                document_id=str(doc.document_id),
+                file_name=doc.file_name,
+                file_type=doc.file_type,
+                file_hash=doc.file_hash,
+                status=doc.status,
+                total_pages=doc.total_pages,
+                doc_version=doc.doc_version,
+                created_at=created_str,
+                chunk_count=chunk_cnt
+            ))
+        app_logger.info(f"API Endpoint: GET /api/v1/documents returned {len(result)} records successfully.")
+        return ResponseBuilder.success(data=result, message=f"Successfully fetched {len(result)} documents")
+    except Exception as e:
+        app_logger.error("API Endpoint: GET /api/v1/documents failed", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to fetch documents: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.delete(
+    "/api/v1/documents/{document_id}",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    tags=["Metadata"],
+    summary="Delete a document and its chunks",
+    description="Removes document metadata and associated chunks from relational database."
+)
+async def delete_document(
+    document_id: str,
+    metadata_service: DocumentMetaDataService = Depends(get_document_metadata_service)
+):
+    app_logger.info(f"API Endpoint: DELETE /api/v1/documents/{document_id} requested")
+    try:
+        doc = metadata_service.get_doc(document_id)
+        if not doc:
+            app_logger.warning(f"API Endpoint: Document ID '{document_id}' not found for deletion.")
+            return ResponseBuilder.failure(
+                message=f"Document with ID '{document_id}' not found",
+                error_code=status.HTTP_404_NOT_FOUND
+            )
+        metadata_service.delete_doc_and_chunks(document_id)
+        app_logger.info(f"API Endpoint: Successfully deleted document ID '{document_id}'.")
+        return ResponseBuilder.success(
+            data={"document_id": document_id},
+            message=f"Document '{doc.file_name}' deleted successfully"
+        )
+    except Exception as e:
+        app_logger.error(f"API Endpoint: DELETE /api/v1/documents/{document_id} failed", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to delete document: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 @app.post(
     "/api/v1/ingest",
@@ -148,6 +245,7 @@ async def ingest_document(
     strategy: str = Form("hi_res", description="Unstructured partitioning strategy (hi_res, fast, auto, ocr_only)."),
     keep_table_as_html: bool = Form(False, description="Keep tables structured as HTML."),
     doc_version: str = Form("1.0.0", description="Document version reference."),
+    enable_vision_model: Optional[bool] = Form(False, description="enable vision model for to get summary for images,tbales"),
     doc_id: Optional[str] = Form(None, description="Optional document ID parameter."),
     db: Session = Depends(get_db),
     embedding_provider: LocalLMStudioEmbeddingProvider = Depends(get_embedding_provider),
@@ -207,7 +305,9 @@ async def ingest_document(
             keepTableAsHtml=keep_table_as_html,
             chunk_size=chunk_size,
             new_after_n_chars=new_after_n_chars,
-            combine_text_under_n_chars=combine_text_under_n_chars
+            combine_text_under_n_chars=combine_text_under_n_chars,
+            enable_vision_model=enable_vision_model
+
         )
 
         ingestion_service = IngestionService(

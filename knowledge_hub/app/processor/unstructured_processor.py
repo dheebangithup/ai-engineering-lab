@@ -1,12 +1,13 @@
+from typing import override, List
 
-from typing import override
-
+from langchain_core.messages import HumanMessage
+from langchain_groq import ChatGroq
 from unstructured.chunking.title import chunk_by_title
 from unstructured.documents.elements import Element
 from unstructured.partition.pdf import partition_pdf
 from unstructured.partition.utils.constants import PartitionStrategy
 
-from knowledge_hub.app.config import app_logger
+from knowledge_hub.app.config import app_logger, app_settings
 from knowledge_hub.app.entity import DocumentMetaDataEntity
 from knowledge_hub.app.enums import FileType, ParserType
 from knowledge_hub.app.model import Document, DocumentMetadata
@@ -21,12 +22,14 @@ class UnStructuredProcessor(DocumentProcessor):
                  chunk_size: int = 500,
                  new_after_n_chars: int = 2400,
                  combine_text_under_n_chars: int = 500,
+                 enable_vision_model: bool = False,
                  ) -> None:
         self.__strategyType = strategyType
         self.__keepTableAsHtml = keepTableAsHtml
         self.__chunk_size = chunk_size
         self.__new_after_n_chars = new_after_n_chars
         self.__combine_text_under_n_chars = combine_text_under_n_chars
+        self.__enable_vision_model=enable_vision_model
         app_logger.info(
             f"UnStructuredProcessor initialized with: strategy={strategyType.value if hasattr(strategyType, 'value') else strategyType}, "
             f"keepTableAsHtml={keepTableAsHtml}, chunk_size={chunk_size}, "
@@ -47,9 +50,10 @@ class UnStructuredProcessor(DocumentProcessor):
     @override
     def compare_config(self, old_config: dict) -> bool:
         if not old_config:
-            app_logger.info("UnStructuredProcessor: No old configuration found. Treating as config changed to ensure it gets written.")
+            app_logger.info(
+                "UnStructuredProcessor: No old configuration found. Treating as config changed to ensure it gets written.")
             return True
-        
+
         current_config = self.get_config()
         config_keys_to_compare = [
             "strategy",
@@ -60,12 +64,14 @@ class UnStructuredProcessor(DocumentProcessor):
         ]
         for key in config_keys_to_compare:
             if current_config.get(key) != old_config.get(key):
-                app_logger.info(f"UnStructuredProcessor: Config difference detected for key '{key}'. Old: {old_config.get(key)}, New: {current_config.get(key)}")
+                app_logger.info(
+                    f"UnStructuredProcessor: Config difference detected for key '{key}'. Old: {old_config.get(key)}, New: {current_config.get(key)}")
                 return True
         return False
 
     def __create_elements(self, file_path: str) -> list[Element]:
-        app_logger.info(f"UnStructuredProcessor: Executing partition_pdf for '{file_path}' using strategy={self.__strategyType.value if hasattr(self.__strategyType, 'value') else self.__strategyType}.")
+        app_logger.info(
+            f"UnStructuredProcessor: Executing partition_pdf for '{file_path}' using strategy={self.__strategyType.value if hasattr(self.__strategyType, 'value') else self.__strategyType}.")
         try:
             elements = partition_pdf(
                 filename=file_path,
@@ -106,7 +112,7 @@ class UnStructuredProcessor(DocumentProcessor):
         try:
             # 1. Partition the elements
             elements = self.__create_elements(file_path)
-            
+
             # Determine total pages
             valid_pages = [
                 element.metadata.page_number
@@ -157,16 +163,79 @@ class UnStructuredProcessor(DocumentProcessor):
                 doc_metadata.chunk_id = HashUtil.generate_chunk_id(doc_metadata.doc_id, page_num, i)
                 doc_metadata.chunk_index = i
                 doc_metadata.chunk_hash = HashUtil.generate_chunk_hash(chunk.text)
-                doc_metadata.doc_version=metadata.doc_version
+                doc_metadata.doc_version = metadata.doc_version
 
-                document = Document(content=chunk.text, metadata=doc_metadata)
+                #cretae summary, if chunk has multi media like image or tables
+                summary=self.create_ai_enhanced_summary(chunk.text, doc_metadata.table_as_html,doc_metadata.images_as_base64)
+                document = Document(content= summary if summary  else chunk.text , metadata=doc_metadata)
                 docs.append(document)
 
             app_logger.info(f"UnStructuredProcessor: Finished processing. Generated {len(docs)} documents.")
             return docs
         except Exception as e:
-            app_logger.error(f"UnStructuredProcessor: Error occurred during document processing for file '{file_path}'", exc_info=True)
+            app_logger.error(f"UnStructuredProcessor: Error occurred during document processing for file '{file_path}'",
+                             exc_info=True)
             raise e
 
+    def create_ai_enhanced_summary(sefl,text: str, tables: List[str], images: List[str]) -> str:
+        """Create AI-enhanced summary multi media context, support , image and tbales"""
+        if  not sefl.__enable_vision_model:
+            app_logger.info(f"UnStructuredProcessor: Skip multi model")
+            return text
+        try:
+            if len(tables) == 0 and len(images) == 0:
+                return text
+            # Initialize LLM (needs vision model for images)
+            llm = ChatGroq(
+                api_key=app_settings.GROQ_API_KEY,
+                model=app_settings.GROQ_VISION_MODEL
+            )
 
+            # Build the text prompt
+            prompt_text = f"""You are creating a searchable description for document content retrieval.
 
+            CONTENT TO ANALYZE:
+            TEXT CONTENT:
+            {text}
+
+            """
+
+            # Add tables if present
+            if tables:
+                prompt_text += "TABLES:\n"
+                for i, table in enumerate(tables):
+                    prompt_text += f"Table {i + 1}:\n{table}\n\n"
+
+                    prompt_text += """
+                    YOUR TASK:
+                    Generate a comprehensive, searchable description that covers:
+
+                    1. Key facts, numbers, and data points from text and tables
+                    2. Main topics and concepts discussed  
+                    3. Questions this content could answer
+                    4. Visual content analysis (charts, diagrams, patterns in images)
+                    5. Alternative search terms users might use
+
+                    Make it detailed and searchable - prioritize findability over brevity.
+
+                    SEARCHABLE DESCRIPTION:"""
+
+            # Build message content starting with text
+            message_content = [{"type": "text", "text": prompt_text}]
+
+            # Add images to the message
+            for image_base64 in images:
+                message_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                })
+
+            # Send to AI and get response
+            message = HumanMessage(content=message_content)
+            response = llm.invoke([message])
+
+            return response.content
+
+        except Exception as e:
+            app_logger.warn(f"error occured while generation ai summary for multimodel", e)
+            return text

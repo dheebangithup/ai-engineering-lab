@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Knowledge Hub RAG Portal</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+
+<body>
+    <div class="app-layout">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <div class="brand-logo">
+                    <i class="fa-solid fa-brain"></i>
+                </div>
+                <div class="brand-text">
+                    <h2>Knowledge Hub</h2>
+                    <span>Enterprise RAG Platform</span>
+                </div>
+            </div>
+
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="tab-search">
+                    <i class="fa-solid fa-magnifying-glass"></i>
+                    <span>RAG Playground</span>
+                </button>
+                <button class="nav-item" data-tab="tab-documents">
+                    <i class="fa-solid fa-folder-open"></i>
+                    <span>Document Repository</span>
+                    <span class="badge" id="sidebar-doc-count">0</span>
+                </button>
+                <button class="nav-item" data-tab="tab-ingest">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                    <span>Ingestion Studio</span>
+                </button>
+                <button class="nav-item" data-tab="tab-api-docs">
+                    <i class="fa-solid fa-code"></i>
+                    <span>API Reference</span>
+                </button>
+            </nav>
+
+            <div class="system-status-card">
+                <div class="status-header">
+                    <span class="status-indicator online"></span>
+                    <span class="status-title">System Status</span>
+                </div>
+                <div class="status-metrics">
+                    <div class="metric">
+                        <span class="metric-label">Vector Store</span>
+                        <span class="metric-val">Qdrant Active</span>
+                    </div>
+                    <div class="metric">
+                        <span class="metric-label">LLM Engine</span>
+                        <span class="metric-val" id="llm-status-text">LM Studio</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="topbar">
+                <div class="page-title">
+                    <h1 id="current-tab-title">RAG Semantic Search & LLM Playground</h1>
+                    <p id="current-tab-subtitle">Perform hybrid semantic search, context building, and LLM text
+                        generation</p>
+                </div>
+                <div class="topbar-actions">
+                    <button class="btn btn-secondary btn-sm" id="btn-refresh-all">
+                        <i class="fa-solid fa-rotate"></i> Refresh State
+                    </button>
+                    <a href="/docs" target="_blank" class="btn btn-primary btn-sm">
+                        <i class="fa-solid fa-book-open"></i> OpenAPI Specs
+                    </a>
+                </div>
+            </header>
+
+            <!-- Notification Toast Container -->
+            <div id="toast-container" class="toast-container"></div>
+
+            <!-- Tab 1: RAG Search & LLM Playground -->
+            <section id="tab-search" class="tab-pane active">
+                <div class="grid-layout search-grid">
+                    <!-- Left Column: Search & Controls -->
+                    <div class="card search-control-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-sliders"></i> Search & Generation Parameters</h3>
+                        </div>
+                        <form id="search-form" class="card-body">
+                            <!-- Query Input -->
+                            <div class="form-group">
+                                <label for="search-query">Natural Language Query <span class="required">*</span></label>
+                                <div class="query-input-wrapper">
+                                    <textarea id="search-query" rows="3"
+                                        placeholder="Ask a question about your uploaded enterprise documents..."
+                                        required></textarea>
+                                </div>
+                            </div>
+
+                            <!-- Primary Vector Search Parameters -->
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="search-top-k">
+                                        Top-K Candidates: <span id="val-top-k" class="param-val">5</span>
+                                    </label>
+                                    <input type="range" id="search-top-k" min="1" max="50" value="5" class="slider">
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="search-score-threshold">
+                                        Similarity Threshold: <span id="val-score-threshold"
+                                            class="param-val">0.10</span>
+                                    </label>
+                                    <input type="range" id="search-score-threshold" min="0.0" max="1.0" step="0.05"
+                                        value="0.10" class="slider">
+                                </div>
+                            </div>
+
+                            <!-- LLM Controls -->
+                            <div class="form-row align-center">
+                                <div class="form-group col-6">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="search-enable-llm" checked>
+                                        <span class="checkmark"></span>
+                                        <span class="label-text">Enable LLM Generation</span>
+                                    </label>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="search-temperature">
+                                        Temperature: <span id="val-temperature" class="param-val">0.70</span>
+                                    </label>
+                                    <input type="range" id="search-temperature" min="0.0" max="2.0" step="0.05"
+                                        value="0.70" class="slider">
+                                </div>
+                            </div>
+
+                            <!-- Prompt Provisioning Options -->
+                            <div class="accordion-item">
+                                <button type="button" class="accordion-header" data-toggle="acc-prompt">
+                                    <span><i class="fa-solid fa-feather-pointed"></i> Prompt Provisioning
+                                        Settings</span>
+                                    <i class="fa-solid fa-chevron-down acc-icon"></i>
+                                </button>
+                                <div id="acc-prompt" class="accordion-content">
+                                    <div class="form-row">
+                                        <div class="form-group col-6">
+                                            <label for="search-prompt-name">Prompt Template Name</label>
+                                            <input type="text" id="search-prompt-name" value="rag_qa"
+                                                placeholder="e.g. rag_qa">
+                                        </div>
+                                        <div class="form-group col-6">
+                                            <label for="search-prompt-version">Prompt Version</label>
+                                            <input type="text" id="search-prompt-version"
+                                                placeholder="e.g. v1.0.0 (default active)">
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="search-additional-vars">Additional Prompt Variables (JSON)</label>
+                                        <textarea id="search-additional-vars" rows="2"
+                                            placeholder='{"domain": "machine_learning"}' class="code-input"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- ContextBuilder Configuration Overrides -->
+                            <div class="accordion-item">
+                                <button type="button" class="accordion-header" data-toggle="acc-context-builder">
+                                    <span><i class="fa-solid fa-cubes-stacked"></i> ContextBuilder Pipeline
+                                        Config</span>
+                                    <i class="fa-solid fa-chevron-down acc-icon"></i>
+                                </button>
+                                <div id="acc-context-builder" class="accordion-content">
+                                    <div class="form-row">
+                                        <div class="form-group col-6">
+                                            <label for="cb-max-tokens">Max Context Tokens</label>
+                                            <input type="number" id="cb-max-tokens" value="4096" min="100" max="16384">
+                                        </div>
+                                        <div class="form-group col-6">
+                                            <label for="cb-sort-strategy">Sort Strategy</label>
+                                            <select id="cb-sort-strategy">
+                                                <option value="score_desc" selected>Score Descending</option>
+                                                <option value="document_order">Document Reading Order</option>
+                                                <option value="hybrid">Hybrid (Doc + Score)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <div class="form-group col-12">
+                                            <label for="cb-min-score-threshold">
+                                                Pipeline Min Score Filter: <span id="val-cb-min-score"
+                                                    class="param-val">0.10</span>
+                                            </label>
+                                            <input type="range" id="cb-min-score-threshold" min="0.0" max="1.0"
+                                                step="0.05" value="0.10" class="slider">
+                                        </div>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <div class="form-group col-6">
+                                            <label class="checkbox-container">
+                                                <input type="checkbox" id="cb-adjacent-expansion">
+                                                <span class="checkmark"></span>
+                                                <span class="label-text">Adjacent Expansion</span>
+                                            </label>
+                                        </div>
+                                        <div class="form-group col-6">
+                                            <label for="cb-adjacency-window">Adjacency Window</label>
+                                            <input type="number" id="cb-adjacency-window" value="1" min="1" max="5">
+                                        </div>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <div class="form-group col-6">
+                                            <label class="checkbox-container">
+                                                <input type="checkbox" id="cb-chunk-merging" checked>
+                                                <span class="checkmark"></span>
+                                                <span class="label-text">Chunk Merging</span>
+                                            </label>
+                                        </div>
+                                        <div class="form-group col-6">
+                                            <label for="cb-merge-gap">Max Merge Gap</label>
+                                            <input type="number" id="cb-merge-gap" value="1" min="0" max="5">
+                                        </div>
+                                    </div>
+
+                                    <div class="form-row">
+                                        <div class="form-group col-6">
+                                            <label class="checkbox-container">
+                                                <input type="checkbox" id="cb-source-header" checked>
+                                                <span class="checkmark"></span>
+                                                <span class="label-text">Include Source Headers</span>
+                                            </label>
+                                        </div>
+                                        <div class="form-group col-6">
+                                            <label class="checkbox-container">
+                                                <input type="checkbox" id="cb-chunk-separator" checked>
+                                                <span class="checkmark"></span>
+                                                <span class="label-text">Include Separators</span>
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="cb-header-template">Header Template</label>
+                                        <input type="text" id="cb-header-template"
+                                            value="[Source: {file_name} | Page {page_number}]">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label for="cb-separator-str">Chunk Separator String</label>
+                                        <input type="text" id="cb-separator-str" value="\n---\n">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Optional Metadata Filters -->
+                            <div class="accordion-item">
+                                <button type="button" class="accordion-header" data-toggle="acc-filters">
+                                    <span><i class="fa-solid fa-filter"></i> Metadata Filters (JSON)</span>
+                                    <i class="fa-solid fa-chevron-down acc-icon"></i>
+                                </button>
+                                <div id="acc-filters" class="accordion-content">
+                                    <div class="form-group">
+                                        <textarea id="search-filters" rows="2" placeholder='{"file_type": "pdf"}'
+                                            class="code-input"></textarea>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-submit-search">
+                                <i class="fa-solid fa-paper-plane"></i> Execute RAG Retrieval & Answer
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Right Column: Results & Workspace -->
+                    <div class="results-workspace">
+                        <!-- Result Navigation Tabs -->
+                        <div class="tabs-header">
+                            <button class="tab-btn active" data-target="res-llm-answer">
+                                <i class="fa-solid fa-sparkles"></i> Generated Answer
+                            </button>
+                            <button class="tab-btn" data-target="res-chunks">
+                                <i class="fa-solid fa-list-check"></i> Vector Candidates (<span
+                                    id="chunk-count-badge">0</span>)
+                            </button>
+                            <button class="tab-btn" data-target="res-context">
+                                <i class="fa-solid fa-layer-group"></i> Assembled Context
+                            </button>
+                            <button class="tab-btn" data-target="res-prompt">
+                                <i class="fa-solid fa-code"></i> Provisioned Prompt
+                            </button>
+                        </div>
+
+                        <!-- Result Panels -->
+                        <div class="tab-content">
+                            <!-- Panel 1: LLM Generated Answer -->
+                            <div id="res-llm-answer" class="res-panel active">
+                                <div id="llm-output-container" class="card empty-state-card">
+                                    <div class="empty-state">
+                                        <i class="fa-solid fa-message-bot"></i>
+                                        <h3>Ready for RAG Generation</h3>
+                                        <p>Enter a query on the left and click execute to view LLM-generated answers
+                                            backed by enterprise vector context.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Panel 2: Vector Search Candidate Chunks -->
+                            <div id="res-chunks" class="res-panel">
+                                <div id="chunks-output-container" class="chunks-list">
+                                    <div class="card empty-state-card">
+                                        <div class="empty-state">
+                                            <i class="fa-solid fa-database"></i>
+                                            <h3>No Vector Candidates Loaded</h3>
+                                            <p>Retrieved vector chunks with metadata, similarity scores, and HTML
+                                                tables/vision summaries will appear here.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Panel 3: Assembled Context -->
+                            <div id="res-context" class="res-panel">
+                                <div class="card">
+                                    <div class="card-header space-between">
+                                        <h4>ContextBuilder Output Payload</h4>
+                                        <div class="metrics-row" id="context-metrics">
+                                            <span class="badge badge-outline">Tokens: <strong
+                                                    id="ctx-token-count">0</strong></span>
+                                            <span class="badge badge-outline">Chunks: <strong
+                                                    id="ctx-chunk-count">0</strong></span>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <pre class="code-block"
+                                            id="context-text-block">Context will be displayed here after executing a query...</pre>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Panel 4: Provisioned Prompt -->
+                            <div id="res-prompt" class="res-panel">
+                                <div class="card">
+                                    <div class="card-header space-between">
+                                        <h4>Rendered Versioned Prompt Template</h4>
+                                        <span class="badge badge-primary" id="rendered-prompt-badge">None</span>
+                                    </div>
+                                    <div class="card-body">
+                                        <pre class="code-block"
+                                            id="prompt-text-block">Provisioned prompt string will be displayed here...</pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 2: Document Repository -->
+            <section id="tab-documents" class="tab-pane">
+                <div class="card">
+                    <div class="card-header space-between">
+                        <h3><i class="fa-solid fa-database"></i> Uploaded Document Registry</h3>
+                        <button class="btn btn-secondary btn-sm" id="btn-refresh-docs">
+                            <i class="fa-solid fa-rotate"></i> Refresh Documents
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="data-table" id="docs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Document Name</th>
+                                        <th>File Type</th>
+                                        <th>Version</th>
+                                        <th>Status</th>
+                                        <th>Pages</th>
+                                        <th>Chunks</th>
+                                        <th>Created At</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="docs-table-body">
+                                    <tr>
+                                        <td colspan="8" class="text-center py-4 text-muted">
+                                            <i class="fa-solid fa-spinner fa-spin mr-2"></i> Loading document
+                                            metadata...
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 3: Document Ingestion Studio -->
+            <section id="tab-ingest" class="tab-pane">
+                <div class="grid-layout ingest-grid">
+                    <!-- Left: Upload Form -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-cloud-arrow-up"></i> Document Ingestion Pipeline</h3>
+                        </div>
+                        <form id="ingest-form" class="card-body">
+                            <!-- Drag & Drop Zone -->
+                            <div class="drop-zone" id="drop-zone">
+                                <div class="drop-zone-icon">
+                                    <i class="fa-solid fa-file-pdf"></i>
+                                </div>
+                                <h4>Drag & Drop your document here</h4>
+                                <p>Supports PDF, DOCX, Markdown (.md), or Images</p>
+                                <span class="divider-text">OR</span>
+                                <label for="ingest-file-input" class="btn btn-secondary btn-sm">
+                                    <i class="fa-solid fa-folder-open"></i> Browse Files
+                                </label>
+                                <input type="file" id="ingest-file-input" class="hidden-file-input" required>
+                                <div id="selected-file-badge" class="selected-file-badge hidden">
+                                    <i class="fa-solid fa-paperclip"></i>
+                                    <span id="selected-file-name">filename.pdf</span>
+                                    <button type="button" id="btn-remove-file" class="btn-icon"><i
+                                            class="fa-solid fa-xmark"></i></button>
+                                </div>
+                            </div>
+
+                            <!-- Ingestion Form Fields (EVERY Parameter Covered) -->
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="ingest-file-type">File Type Format <span
+                                            class="required">*</span></label>
+                                    <select id="ingest-file-type" required>
+                                        <option value="pdf" selected>PDF Document</option>
+                                        <option value="docx">Word Document (DOCX)</option>
+                                        <option value="md">Markdown (.md)</option>
+                                        <option value="image">Image (PNG / JPG)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="ingest-strategy">Partitioning Strategy</label>
+                                    <select id="ingest-strategy">
+                                        <option value="hi_res" selected>High Resolution (hi_res)</option>
+                                        <option value="fast">Fast Parser (fast)</option>
+                                        <option value="auto">Automatic (auto)</option>
+                                        <option value="ocr_only">OCR Only (ocr_only)</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group col-4">
+                                    <label for="ingest-chunk-size">Chunk Size</label>
+                                    <input type="number" id="ingest-chunk-size" value="500" min="1" max="8192">
+                                </div>
+                                <div class="form-group col-4">
+                                    <label for="ingest-new-after">New After N Chars</label>
+                                    <input type="number" id="ingest-new-after" value="2400" min="1">
+                                </div>
+                                <div class="form-group col-4">
+                                    <label for="ingest-combine-under">Combine Under N Chars</label>
+                                    <input type="number" id="ingest-combine-under" value="500" min="0">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label for="ingest-doc-version">Document Version</label>
+                                    <input type="text" id="ingest-doc-version" value="1.0.0" placeholder="e.g. 1.0.0">
+                                </div>
+                                <div class="form-group col-6">
+                                    <label for="ingest-doc-id">Custom Doc ID (Optional)</label>
+                                    <input type="text" id="ingest-doc-id" placeholder="Leave empty for auto UUID">
+                                </div>
+                            </div>
+
+                            <div class="form-row">
+                                <div class="form-group col-6">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="ingest-keep-table-html">
+                                        <span class="checkmark"></span>
+                                        <span class="label-text">Keep Tables as HTML</span>
+                                    </label>
+                                </div>
+                                <div class="form-group col-6">
+                                    <label class="checkbox-container">
+                                        <input type="checkbox" id="ingest-vision-model">
+                                        <span class="checkmark"></span>
+                                        <span class="label-text">Enable Vision Model Summary</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-submit-ingest">
+                                <i class="fa-solid fa-microchip"></i> Start Document Ingestion Pipeline
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Right: Ingestion Log & Output -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-terminal"></i> Ingestion Execution Output</h3>
+                        </div>
+                        <div class="card-body">
+                            <div id="ingest-output-status" class="ingest-output-placeholder">
+                                <i class="fa-solid fa-gears"></i>
+                                <h4>No Ingestion Job Executed Yet</h4>
+                                <p>Select a document file, configure parsing parameters, and click start ingestion to
+                                    see real-time pipeline response.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 4: API Reference -->
+            <section id="tab-api-docs" class="tab-pane">
+                <div class="card">
+                    <div class="card-header space-between">
+                        <h3><i class="fa-solid fa-code"></i> Enterprise API Endpoint Specifications</h3>
+                        <a href="/docs" target="_blank" class="btn btn-primary btn-sm"><i
+                                class="fa-solid fa-arrow-up-right-from-square"></i> Swagger UI</a>
+                    </div>
+                    <div class="card-body">
+                        <div class="api-card">
+                            <div class="api-method post">POST</div>
+                            <div class="api-path">/api/v1/search</div>
+                            <div class="api-desc">Perform hybrid semantic retrieval, context assembly via
+                                ContextBuilder, prompt rendering, and LLM text generation.</div>
+                        </div>
+
+                        <div class="api-card">
+                            <div class="api-method post">POST</div>
+                            <div class="api-path">/api/v1/ingest</div>
+                            <div class="api-desc">Upload document file, execute UnStructured partitioning, compute
+                                Qdrant vector embeddings, and save relational metadata.</div>
+                        </div>
+
+                        <div class="api-card">
+                            <div class="api-method get">GET</div>
+                            <div class="api-path">/api/v1/documents</div>
+                            <div class="api-desc">Fetch all uploaded document metadata entities stored in PostgreSQL
+                                database.</div>
+                        </div>
+
+                        <div class="api-card">
+                            <div class="api-method delete">DELETE</div>
+                            <div class="api-path">/api/v1/documents/{document_id}</div>
+                            <div class="api-desc">Delete document metadata and all associated chunk entities.</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Custom App JavaScript -->
+    <script src="/static/app.js"></script>
+</body>
+
+</html>

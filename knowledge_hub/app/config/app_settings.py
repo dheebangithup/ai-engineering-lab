@@ -15,6 +15,9 @@ class AppSettings(BaseSettings):
     LOCAL_LM_CHAT_MODEL: str = 'qwen2.5-7b-instruct-1m:3'
     LOCAL_LM_TEMPERATURE: float = 0.7
 
+    GROQ_API_KEY:str=''
+    GROQ_VISION_MODEL:str='llama-3.1-8b-instant'
+
     POSTGRES_URL: str = ''
 
     # Context & Retrieval Settings

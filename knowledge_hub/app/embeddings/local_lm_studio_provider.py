@@ -52,7 +52,7 @@ class LocalLMStudioEmbeddingProvider(EmbeddingProvider):
                  ))
             except Exception as e:
                 app_logger.warning(f"Error embedding chunk {i} document: {chunk}", exc_info=True)
-                continue
+                raise e
 
         app_logger.info(f"Embeddings completed. Successfully embedded {len(embedded_docs)} documents out of {len(chunks)} chunks")
 
