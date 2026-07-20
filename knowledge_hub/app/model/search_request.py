@@ -1,6 +1,6 @@
 """
 SearchRequest Pydantic Model for API retrieval endpoints.
-Exposes ContextBuilderConfig and Prompt Provisioning controls directly via API.
+Exposes ContextBuilderConfig, Prompt Provisioning, and LLM Generation controls directly via API.
 """
 
 from typing import Optional, Any
@@ -55,4 +55,16 @@ class SearchRequest(BaseModel):
     additional_prompt_vars: Optional[dict[str, Any]] = Field(
         None,
         description="Additional custom variables passed during prompt template rendering."
+    )
+
+    # LLM Generation controls
+    enable_llm_generation: Optional[bool] = Field(
+        None,
+        description="Whether to execute LLM text generation using rendered prompt and local LM Studio. Defaults to True when prompt_name is set."
+    )
+    temperature: Optional[float] = Field(
+        None,
+        description="Optional sampling temperature override for LLM generation (e.g., 0.7).",
+        ge=0.0,
+        le=2.0
     )

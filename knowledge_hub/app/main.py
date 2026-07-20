@@ -15,7 +15,7 @@ from knowledge_hub.app.database.qdrant_store import QdrantStore
 from knowledge_hub.app.embeddings import LocalLMStudioEmbeddingProvider
 from knowledge_hub.app.enums import FileType
 from knowledge_hub.app.repositories import DocumentMetaDataRepository, ChunkMetaDataRepository
-from knowledge_hub.app.service import IngestionService, DocumentMetaDataService, RetrievalService
+from knowledge_hub.app.service import IngestionService, DocumentMetaDataService, RetrievalService, LlmService
 from knowledge_hub.app.service.retrieval_service import RetrievalResult
 from knowledge_hub.app.model import SearchRequest, SearchResponse
 from knowledge_hub.app.model.api_reponse import ApiResponse, ResponseBuilder
@@ -109,11 +109,19 @@ def get_embedding_provider() -> LocalLMStudioEmbeddingProvider:
 def get_vector_store(embedding_provider: LocalLMStudioEmbeddingProvider = Depends(get_embedding_provider)) -> QdrantStore:
     return QdrantStore(embedding_provider=embedding_provider)
 
+def get_llm_service() -> LlmService:
+    return LlmService()
+
 def get_retrieval_service(
     metadata_service: DocumentMetaDataService = Depends(get_document_metadata_service),
-    vector_store: QdrantStore = Depends(get_vector_store)
+    vector_store: QdrantStore = Depends(get_vector_store),
+    llm_service: LlmService = Depends(get_llm_service),
 ) -> RetrievalService:
-    return RetrievalService(document_metadata_service=metadata_service, vector_store=vector_store)
+    return RetrievalService(
+        document_metadata_service=metadata_service,
+        vector_store=vector_store,
+        llm_service=llm_service,
+    )
 
 # Routes
 @app.get("/", tags=["General"])

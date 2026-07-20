@@ -1,5 +1,5 @@
 """
-RetrievalService: Orchestrates query execution, context assembly, and prompt provisioning.
+RetrievalService: Orchestrates query execution, context assembly, prompt provisioning, and LLM text generation.
 
 Pipeline:
     User Query
@@ -17,7 +17,10 @@ Pipeline:
     4. Prompt Provisioning (PromptRegistry versioned template binding)
       │
       ▼
-    5. Response Assembly (SearchResponse + BuiltContext + RenderedPrompt)
+    5. LLM Generation (LangChain ChatOpenAI call via LlmService)
+      │
+      ▼
+    6. Response Assembly (SearchResponse + BuiltContext + RenderedPrompt + LLMGenerationResult)
 """
 
 from __future__ import annotations
@@ -37,12 +40,13 @@ from knowledge_hub.app.model import SearchRequest, SearchResponse
 from knowledge_hub.app.model.api_reponse import ApiResponse, ResponseBuilder
 from knowledge_hub.app.prompts import RenderedPrompt, prompt_registry
 from knowledge_hub.app.service.document_metadata_service import DocumentMetaDataService
+from knowledge_hub.app.service.llm_service import LlmService, LLMGenerationResult
 
 logger = logging.getLogger("app")
 
 
 # ---------------------------------------------------------------------------
-# Response model: wraps raw results + assembled context + rendered prompt
+# Response model: wraps raw results + assembled context + rendered prompt + LLM answer
 # ---------------------------------------------------------------------------
 @dataclass
 class RetrievalResult:
@@ -53,10 +57,12 @@ class RetrievalResult:
         search_response: Raw ranked chunks from the vector store.
         built_context:   Fully processed context string ready for LLM consumption.
         rendered_prompt: Optional versioned prompt rendered with context & query.
+        llm_response:    Optional LLM generated answer from LangChain ChatOpenAI.
     """
     search_response: SearchResponse
     built_context: BuiltContext
     rendered_prompt: RenderedPrompt | None = None
+    llm_response: LLMGenerationResult | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -65,12 +71,8 @@ class RetrievalResult:
 class RetrievalService:
     """
     Retrieves relevant chunks from the vector store, runs them through
-    the enterprise ContextBuilder pipeline, and optionally provisions versioned prompts.
-
-    Constructor args:
-        document_metadata_service: Service for fetching document-level metadata.
-        vector_store:              Qdrant-backed vector similarity search.
-        context_builder_config:    Optional fallback pipeline config.
+    the enterprise ContextBuilder pipeline, provisions versioned prompts,
+    and optionally generates answers using LangChain ChatOpenAI.
     """
 
     def __init__(
@@ -78,13 +80,16 @@ class RetrievalService:
         document_metadata_service: DocumentMetaDataService,
         vector_store: VectorStore,
         context_builder_config: ContextBuilderConfig | None = None,
+        llm_service: LlmService | None = None,
     ):
         self.__metadata_service = document_metadata_service
         self.__vector_store = vector_store
         self.__context_builder_config = context_builder_config
+        self.__llm_service = llm_service or LlmService()
         logger.info(
-            "RetrievalService: initialised | custom_cb_config=%s",
+            "RetrievalService: initialised | custom_cb_config=%s custom_llm_service=%s",
             context_builder_config is not None,
+            llm_service is not None,
         )
 
     # ------------------------------------------------------------------
@@ -96,21 +101,27 @@ class RetrievalService:
         option: SearchRequest,
     ) -> ApiResponse[RetrievalResult] | ApiResponse[None]:
         """
-        Execute end-to-end retrieval, context assembly, and optional prompt provisioning.
+        Execute end-to-end retrieval, context assembly, prompt provisioning, and optional LLM text generation.
 
         Args:
             option: SearchRequest containing query, vector params, context_builder overrides,
-                    and optional prompt provisioning params.
+                    prompt provisioning params, and enable_llm_generation flag.
 
         Returns:
             ApiResponse[RetrievalResult] on success.
             ApiResponse[None] on validation failure or unhandled exception.
         """
+        eff_enable_llm = (
+            option.enable_llm_generation
+            if option.enable_llm_generation is not None
+            else (option.prompt_name is not None)
+        )
+
         logger.info(
             "RetrievalService.search: starting | query='%s' top_k=%d "
-            "score_threshold=%.3f max_context_tokens=%d prompt_name=%s prompt_version=%s",
+            "score_threshold=%.3f max_context_tokens=%d prompt_name=%s prompt_version=%s enable_llm=%s",
             option.query, option.top_k, option.score_threshold, option.max_context_tokens,
-            option.prompt_name, option.prompt_version,
+            option.prompt_name, option.prompt_version, eff_enable_llm,
         )
 
         # ── 1. Validation ─────────────────────────────────────────────────
@@ -141,6 +152,7 @@ class RetrievalService:
                         search_response=search_response,
                         built_context=empty_context,
                         rendered_prompt=None,
+                        llm_response=None,
                     ),
                     "No matching documents found",
                 )
@@ -165,7 +177,14 @@ class RetrievalService:
 
             # ── 4. Optional Prompt Provisioning ───────────────────────────
             rendered_prompt: RenderedPrompt | None = None
-            if option.prompt_name:
+            eff_enable_llm = (
+                option.enable_llm_generation
+                if option.enable_llm_generation is not None
+                else (option.prompt_name is not None)
+            )
+            eff_prompt_name = option.prompt_name or ("rag_qa" if eff_enable_llm else None)
+
+            if eff_prompt_name:
                 try:
                     prompt_vars = {
                         "context": built_context.context_str,
@@ -176,10 +195,10 @@ class RetrievalService:
 
                     logger.debug(
                         "RetrievalService.search: provisioning prompt '%s' [version=%s]",
-                        option.prompt_name, option.prompt_version or "active",
+                        eff_prompt_name, option.prompt_version or "active",
                     )
                     rendered_prompt = prompt_registry.render(
-                        name=option.prompt_name,
+                        name=eff_prompt_name,
                         variables=prompt_vars,
                         version=option.prompt_version,
                     )
@@ -190,26 +209,52 @@ class RetrievalService:
                 except Exception as pe:
                     logger.error(
                         "RetrievalService.search: failed to provision prompt '%s': %s",
-                        option.prompt_name, str(pe),
+                        eff_prompt_name, str(pe),
                         exc_info=True,
                     )
                     return ResponseBuilder.failure(f"Prompt provisioning failed: {str(pe)}")
 
+            # ── 5. Optional LLM Generation ─────────────────────────────────
+            llm_result: LLMGenerationResult | None = None
+            if eff_enable_llm:
+                if not rendered_prompt:
+                    logger.error("RetrievalService.search: LLM generation requested but no rendered prompt available")
+                    return ResponseBuilder.failure("LLM generation requested but prompt rendering failed")
+
+                try:
+                    logger.info("RetrievalService.search: invoking LLM via LlmService")
+                    llm_result = self.__llm_service.generate_answer(
+                        rendered_prompt=rendered_prompt,
+                        temperature_override=option.temperature,
+                    )
+                    logger.info(
+                        "RetrievalService.search: LLM generation completed | model=%s latency_ms=%.2f",
+                        llm_result.model_name, llm_result.latency_ms,
+                    )
+                except Exception as le:
+                    logger.error(
+                        "RetrievalService.search: LLM generation error: %s",
+                        str(le), exc_info=True,
+                    )
+                    return ResponseBuilder.failure(f"LLM generation error: {str(le)}")
+
             logger.info(
                 "RetrievalService.search: pipeline done | "
-                "raw_chunks=%d context_chunks=%d tokens=%d prompt_provisioned=%s stats=%s",
+                "raw_chunks=%d context_chunks=%d tokens=%d prompt_provisioned=%s llm_generated=%s stats=%s",
                 len(search_response.results),
                 built_context.chunk_count,
                 built_context.token_count,
                 rendered_prompt is not None,
+                llm_result is not None,
                 built_context.pipeline_stats,
             )
 
-            # ── 5. Assemble response ───────────────────────────────────────
+            # ── 6. Assemble response ───────────────────────────────────────
             result = RetrievalResult(
                 search_response=search_response,
                 built_context=built_context,
                 rendered_prompt=rendered_prompt,
+                llm_response=llm_result,
             )
             return ResponseBuilder.success(result, "success")
 
@@ -239,6 +284,8 @@ class RetrievalService:
             return f"score_threshold must be between 0.0 and 1.0; got {option.score_threshold}."
         if option.max_context_tokens < 100:
             return f"max_context_tokens must be ≥ 100; got {option.max_context_tokens}."
+        if option.temperature is not None and not (0.0 <= option.temperature <= 2.0):
+            return f"temperature must be between 0.0 and 2.0; got {option.temperature}."
         return None
 
     def _resolve_context_builder_config(self, option: SearchRequest) -> ContextBuilderConfig:

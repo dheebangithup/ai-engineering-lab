@@ -10,8 +10,10 @@ class AppSettings(BaseSettings):
     COLLECTION_NAME: str = ''
 
     LOCAL_LM_EMBEDDING_MODEL: str = ''
-    LOCAL_LM_URL: str = ''
-    LOCAL_LM_API_KEY: str = ''
+    LOCAL_LM_URL: str = 'http://localhost:1234/v1'
+    LOCAL_LM_API_KEY: str = 'lm-studio'
+    LOCAL_LM_CHAT_MODEL: str = 'qwen2.5-7b-instruct-1m:3'
+    LOCAL_LM_TEMPERATURE: float = 0.7
 
     POSTGRES_URL: str = ''
 
