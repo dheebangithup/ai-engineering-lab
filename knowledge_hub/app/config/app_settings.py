@@ -25,4 +25,15 @@ class AppSettings(BaseSettings):
     DEFAULT_SCORE_THRESHOLD: float = 0.7
     DEFAULT_TOP_K: int = 5
 
+    # Configurable Indexed Payload Fields for Qdrant Metadata Filtering
+    INDEXED_PAYLOAD_FIELDS: dict[str, str] = {
+        "document_id": "keyword",
+        "page_number": "integer",
+        "chunk_id": "keyword",
+        "file_type": "keyword",
+        "doc_version": "keyword",
+        "file_name": "keyword",
+    }
+
     model_config = SettingsConfigDict(env_file=BASE_DIR / ".env")
+

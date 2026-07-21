@@ -6,7 +6,7 @@ from knowledge_hub.app.config import app_settings
 # Create engine
 engine = create_engine(
     app_settings.POSTGRES_URL,
-    echo=True,              # Logs SQL queries (disable in production)
+    echo=False,              # Logs SQL queries (disable in production)
     pool_size=10,           # Connection pool size
     max_overflow=20,        # Extra connections beyond pool_size
     pool_timeout=30,        # Timeout for getting a connection

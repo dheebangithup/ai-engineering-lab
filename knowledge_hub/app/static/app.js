@@ -567,24 +567,62 @@ document.addEventListener('DOMContentLoaded', () => {
             DOM.chunksOutputContainer.innerHTML = chunks.map((item, idx) => {
                 const doc = item.document || {};
                 const scorePct = (item.score * 100).toFixed(1);
+                const rawScore = typeof item.score === 'number' ? item.score.toFixed(4) : 'N/A';
+                const docId = doc.document_id || 'N/A';
+                const chunkId = doc.chunk_id || 'N/A';
+                const docVersion = doc.doc_version || '1.0.0';
+                const pageNum = doc.page_number !== undefined && doc.page_number !== null ? doc.page_number : 'N/A';
+                const chunkIdx = doc.chuk_index !== undefined ? doc.chuk_index : (doc.chunk_index !== undefined ? doc.chunk_index : 'N/A');
+                const sourcePath = doc.source || 'N/A';
+                const fileType = doc.file_type || (doc.file_name ? doc.file_name.split('.').pop().toUpperCase() : 'PDF');
+
                 return `
                     <div class="chunk-card">
                         <div class="chunk-header">
                             <div class="chunk-doc-title">
                                 <i class="fa-solid fa-file-lines text-primary"></i>
                                 ${escapeHtml(doc.file_name || 'Unknown Document')}
+                                <span class="badge badge-outline" style="margin-left: 0.5rem; font-size: 0.7rem;">v${escapeHtml(docVersion)}</span>
                             </div>
-                            <span class="chunk-score-badge">${scorePct}% Similarity</span>
+                            <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                <span class="badge badge-primary" style="font-size: 0.75rem;">Score: ${rawScore}</span>
+                                <span class="chunk-score-badge">${scorePct}% Similarity</span>
+                            </div>
                         </div>
+
+                        <!-- All Available Metadata Pills -->
+                        <div class="chunk-metadata-pills" style="display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.75rem; font-size: 0.75rem; font-family: var(--font-mono);">
+                            <span class="meta-pill" style="background: rgba(255,255,255,0.04); padding: 0.25rem 0.55rem; border-radius: 4px; border: 1px solid var(--border-color);" title="Document ID">
+                                <i class="fa-solid fa-id-card text-muted mr-1"></i> Doc ID: <strong style="color: #60a5fa;">${escapeHtml(docId)}</strong>
+                            </span>
+                            <span class="meta-pill" style="background: rgba(255,255,255,0.04); padding: 0.25rem 0.55rem; border-radius: 4px; border: 1px solid var(--border-color);" title="Chunk ID">
+                                <i class="fa-solid fa-fingerprint text-muted mr-1"></i> Chunk ID: <strong style="color: #a78bfa;">${escapeHtml(chunkId)}</strong>
+                            </span>
+                            <span class="meta-pill" style="background: rgba(255,255,255,0.04); padding: 0.25rem 0.55rem; border-radius: 4px; border: 1px solid var(--border-color);" title="Page Number">
+                                <i class="fa-solid fa-book-open text-muted mr-1"></i> Page: <strong style="color: #34d399;">${pageNum}</strong>
+                            </span>
+                            <span class="meta-pill" style="background: rgba(255,255,255,0.04); padding: 0.25rem 0.55rem; border-radius: 4px; border: 1px solid var(--border-color);" title="Chunk Index">
+                                <i class="fa-solid fa-hashtag text-muted mr-1"></i> Chunk Index: <strong style="color: #fbbf24;">${chunkIdx}</strong>
+                            </span>
+                            <span class="meta-pill" style="background: rgba(255,255,255,0.04); padding: 0.25rem 0.55rem; border-radius: 4px; border: 1px solid var(--border-color);" title="Document Version">
+                                <i class="fa-solid fa-code-branch text-muted mr-1"></i> Version: <strong style="color: #f472b6;">v${escapeHtml(docVersion)}</strong>
+                            </span>
+                        </div>
+
                         <div class="chunk-body">${escapeHtml(doc.content || '')}</div>
-                        <div class="chunk-footer">
-                            <span>Page: ${doc.page_number !== undefined ? doc.page_number : 'N/A'}</span>
-                            <span>Chunk Hash: ${doc.chunk_hash ? doc.chunk_hash.substring(0, 12) + '...' : 'N/A'}</span>
-                            <span>Type: ${doc.file_type || 'pdf'}</span>
+
+                        <div class="chunk-footer" style="margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-dim); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+                            <span title="${escapeHtml(sourcePath)}">
+                                <i class="fa-solid fa-folder-tree mr-1"></i> Source: <code style="font-size: 0.7rem; color: #cbd5e1; background: rgba(0,0,0,0.3); padding: 0.1rem 0.4rem; border-radius: 3px;">${escapeHtml(sourcePath)}</code>
+                            </span>
+                            <span>
+                                <i class="fa-solid fa-file-code mr-1"></i> Type: <span class="badge badge-outline" style="font-size: 0.65rem;">${escapeHtml(fileType)}</span>
+                            </span>
                         </div>
                     </div>`;
             }).join('');
-        } else {
+        }
+        else {
             DOM.chunksOutputContainer.innerHTML = `
                 <div class="card empty-state-card">
                     <div class="empty-state">

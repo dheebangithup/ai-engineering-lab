@@ -37,23 +37,70 @@ class QdrantStore(VectorStore):
 
     @override
     def search(self, request: SearchRequest) -> SearchResponse:
-        query_vector = self.__embedding_provider.embed_query(request.query)
-        response=self.__client.query_points(
-            collection_name=app_settings.COLLECTION_NAME,
-            query=query_vector,
-            limit=request.top_k
-        )
-        if response.points is None:
-            app_logger.warning(f"No search results for query: {request.query}")
-            raise Exception(f"No search results for query: {request.query}")
+        try:
+            app_logger.info(f"QdrantStore: Executing search query='{request.query}' top_k={request.top_k} score_threshold={request.score_threshold}")
+            query_vector = self.__embedding_provider.embed_query(request.query)
 
-        docs=[]
-        for doc in response.points:
-            docs.append(
-                SearchResult(document=ChunkPayload.from_dict(doc.payload),score=doc.score)
+            # Build metadata filter from request.filters using only indexed fields
+            qdrant_filter = None
+            if request.filters:
+                must_conditions = []
+                allowed_fields = app_settings.INDEXED_PAYLOAD_FIELDS
+                from qdrant_client.http import models
+
+                for key, value in request.filters.items():
+                    if value is None or value == "":
+                        continue
+
+                    if key not in allowed_fields:
+                        app_logger.warning(
+                            f"QdrantStore: Filter key '{key}' is not in configured INDEXED_PAYLOAD_FIELDS ({list(allowed_fields.keys())}). Skipping unindexed filter field."
+                        )
+                        continue
+
+                    if isinstance(value, list):
+                        must_conditions.append(
+                            models.FieldCondition(
+                                key=key,
+                                match=models.MatchAny(any=[str(v) for v in value]),
+                            )
+                        )
+                    else:
+                        must_conditions.append(
+                            models.FieldCondition(
+                                key=key,
+                                match=models.MatchValue(value=value if isinstance(value, (int, float, bool)) else str(value)),
+                            )
+                        )
+
+                if must_conditions:
+                    qdrant_filter = models.Filter(must=must_conditions)
+                    app_logger.info(f"QdrantStore: Applied metadata query filter for keys: {[c.key for c in must_conditions]}")
+
+            # Execute query_points with vector, filter, limit, and score threshold
+            response = self.__client.query_points(
+                collection_name=app_settings.COLLECTION_NAME,
+                query=query_vector,
+                query_filter=qdrant_filter,
+                score_threshold=request.score_threshold if request.score_threshold is not None else None,
+                limit=request.top_k,
             )
-        app_logger.debug(f'search found {len(docs)} documents for query {request.query}')
-        return SearchResponse(results=docs)
+
+            if response.points is None or len(response.points) == 0:
+                app_logger.info(f"QdrantStore: No search results found matching query and filters.")
+                return SearchResponse(results=[])
+
+            docs = []
+            for doc in response.points:
+                docs.append(
+                    SearchResult(document=ChunkPayload.from_dict(doc.payload), score=doc.score)
+                )
+            app_logger.info(f"QdrantStore: Search completed successfully. Found {len(docs)} matching vector candidates.")
+            return SearchResponse(results=docs)
+
+        except Exception as e:
+            app_logger.error(f"QdrantStore: Error executing search query: {str(e)}", exc_info=True)
+            raise e
 
     @override
     def delete(self, chunk_ids: list[str]) -> None:
@@ -105,15 +152,46 @@ class QdrantStore(VectorStore):
             app_logger.error(f"QdrantStore: Error deleting points for document_id '{document_id}' from Qdrant", exc_info=True)
             raise e
 
+    @override
+    def update_payload_by_document(self, document_id: str, payload: dict) -> None:
+        try:
+            if not document_id:
+                app_logger.error("QdrantStore: Validation failed - document_id is missing or empty for payload update.")
+                raise ValueError("document_id must be provided for payload update.")
+            if not payload:
+                app_logger.warning("QdrantStore: Empty payload dict provided for payload update. Skipping operation.")
+                return
+
+            app_logger.info(f"QdrantStore: Bulk updating payload for document_id '{document_id}' in collection '{app_settings.COLLECTION_NAME}' with payload: {payload}")
+            from qdrant_client.http import models
+            self.__client.set_payload(
+                collection_name=app_settings.COLLECTION_NAME,
+                payload=payload,
+                points=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="document_id",
+                                match=models.MatchValue(value=str(document_id)),
+                            ),
+                        ]
+                    )
+                ),
+            )
+            app_logger.info(f"QdrantStore: Successfully updated payload in Qdrant for document_id '{document_id}'.")
+        except Exception as e:
+            app_logger.error(f"QdrantStore: Error updating payload for document_id '{document_id}' in Qdrant: {str(e)}", exc_info=True)
+            raise e
+
     def _ensure_collection(self) -> None:
         """
-        Ensures the Qdrant collection exists and has the correct configuration.
+        Ensures the Qdrant collection exists and payload indexes are created for all configured fields.
         """
-
         collection_name = app_settings.COLLECTION_NAME
         expected_dimension = self.__embedding_provider.dimension
 
         if not self.__client.collection_exists(collection_name):
+            app_logger.info(f"QdrantStore: Creating collection '{collection_name}' with dimension={expected_dimension}")
             self.__client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(
@@ -122,35 +200,35 @@ class QdrantStore(VectorStore):
                 ),
             )
 
-            # Payload indexes (recommended)
-            self.__client.create_payload_index(
-                collection_name=collection_name,
-                field_name="document_id",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-
-            self.__client.create_payload_index(
-                collection_name=collection_name,
-                field_name="page_number",
-                field_schema=PayloadSchemaType.INTEGER,
-            )
-
-            self.__client.create_payload_index(
-                collection_name=collection_name,
-                field_name="chunk_id",
-                field_schema=PayloadSchemaType.KEYWORD,
-            )
-
-            return
-
-        # Collection already exists
+        # Check dimension compatibility if collection exists
         collection = self.__client.get_collection(collection_name)
-
         actual_dimension = collection.config.params.vectors.size
-
         if actual_dimension != expected_dimension:
             raise RuntimeError(
                 f"Embedding dimension mismatch. "
                 f"Collection={actual_dimension}, "
                 f"Embedding Model={expected_dimension}"
             )
+
+        # Ensure payload indexes ONLY for configured fields that are not yet indexed in Qdrant
+        existing_indexes = set(collection.payload_schema.keys()) if collection.payload_schema else set()
+        app_logger.debug(f"QdrantStore: Existing payload indexes in Qdrant: {list(existing_indexes)}")
+
+        for field_name, schema_type in app_settings.INDEXED_PAYLOAD_FIELDS.items():
+            if field_name in existing_indexes:
+                app_logger.debug(f"QdrantStore: Payload index for field '{field_name}' already exists in Qdrant. Skipping creation.")
+                continue
+
+            try:
+                app_logger.info(f"QdrantStore: Payload index missing for field '{field_name}'. Creating {schema_type} index in Qdrant...")
+                s_type = PayloadSchemaType.INTEGER if schema_type == "integer" else PayloadSchemaType.KEYWORD
+                self.__client.create_payload_index(
+                    collection_name=collection_name,
+                    field_name=field_name,
+                    field_schema=s_type,
+                )
+                app_logger.info(f"QdrantStore: Payload index successfully created for field '{field_name}' ({schema_type}).")
+            except Exception as ie:
+                app_logger.warning(f"QdrantStore: Notice while creating payload index for field '{field_name}': {ie}")
+
+

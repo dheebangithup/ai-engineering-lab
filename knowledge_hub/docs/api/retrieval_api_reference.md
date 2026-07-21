@@ -42,9 +42,21 @@
 
 #### 5. `filters`
 - **Type**: `object` / `dictionary` (Optional, Default: `null`)
-- **Description**: Key-value pairs for metadata filtering in Qdrant (e.g., filtering by file name or document ID).
-- **Example**: `{"file_name": "attention-is-all-you-need-paper.pdf"}`
-- **Usecase**: Restricts retrieval scope to a specific document or folder.
+- **Description**: Key-value pairs for database-level vector metadata filtering executed directly inside Qdrant during vector similarity traversal.
+- **Example**: `{"file_type": "pdf", "doc_version": "1.0.0", "page_number": 6}`
+- **Usecase**: Restricts vector retrieval scope to specific documents, versions, page numbers, or file types.
+- **Allowed Indexed Payload Keys**:
+  | Key Name | Data Type | Description | Example Values |
+  | :--- | :--- | :--- | :--- |
+  | `document_id` | `string` (`keyword`) | Filter by exact PostgreSQL document UUID | `"c3e991a1-514e-47cc-a300-ebd6dc2d2c9c"` |
+  | `page_number` | `integer` | Filter by specific document page number | `6` |
+  | `chunk_id` | `string` (`keyword`) | Filter by deterministic chunk UUID v5 | `"75b87a09-c1b5-576c-8181-aea5ccda3d39"` |
+  | `file_type` | `string` (`keyword`) | Filter by file extension format | `"pdf"`, `"docx"`, `"txt"` |
+  | `doc_version` | `string` (`keyword`) | Filter by document version string | `"1.0.0"`, `"2.0.0"` |
+  | `file_name` | `string` (`keyword`) | Filter by exact source filename | `"attention-is-all-you-need-paper.pdf"` |
+- **Combination & Relationship**:
+  > 💡 **Engine Execution & Validation**: Filters are applied inside Qdrant using payload indexes configured via `app_settings.INDEXED_PAYLOAD_FIELDS`. Any filter keys not present in the allowed indexed list are logged as warnings and skipped without crashing the retrieval pipeline. Supports single values or list matches (e.g., `"doc_version": ["1.0.0", "2.0.0"]`).
+
 
 #### 6. `prompt_name`
 - **Type**: `string` (Optional, Default: `null`)
@@ -341,6 +353,10 @@
   "top_k": 10,
   "score_threshold": 0.5,
   "max_context_tokens": 4096,
+  "filters": {
+    "file_type": "pdf",
+    "doc_version": "1.0.0"
+  },
   "prompt_name": "rag_qa",
   "prompt_version": "v1.1.0",
   "context_builder": {
@@ -357,6 +373,7 @@
     "min_score_threshold": 0.5
   }
 }
+
 ```
 
 ### Response

@@ -51,3 +51,14 @@ class VectorStore(ABC):
         Delete all vectors for a document.
         """
         pass
+
+    @abstractmethod
+    def update_payload_by_document(
+        self,
+        document_id: str,
+        payload: dict,
+    ) -> None:
+        """
+        Bulk-update metadata payload for all vectors of a document.
+        """
+        pass

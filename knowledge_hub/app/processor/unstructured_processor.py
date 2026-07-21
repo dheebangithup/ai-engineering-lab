@@ -220,22 +220,26 @@ class UnStructuredProcessor(DocumentProcessor):
 
                     SEARCHABLE DESCRIPTION:"""
 
-            # Build message content starting with text
-            message_content = [{"type": "text", "text": prompt_text}]
-
-            # Add images to the message
-            for image_base64 in images:
-                message_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
-                })
+            # Build message content: plain string if text-only/tables, multimodal list if images present
+            if not images:
+                message = HumanMessage(content=prompt_text)
+            else:
+                message_content = [{"type": "text", "text": prompt_text}]
+                for image_base64 in images:
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
+                    })
+                message = HumanMessage(content=message_content)
 
             # Send to AI and get response
-            message = HumanMessage(content=message_content)
+            app_logger.info(f"UnStructuredProcessor: Invoking ChatGroq vision model for AI-enhanced summary (tables={len(tables)}, images={len(images)}).")
             response = llm.invoke([message])
+            app_logger.info("UnStructuredProcessor: AI-enhanced summary generated successfully.")
 
             return response.content
 
         except Exception as e:
-            app_logger.warn(f"error occured while generation ai summary for multimodel", e)
+            app_logger.warning(f"UnStructuredProcessor: Error occurred while generating AI summary for multimodal content: {str(e)}", exc_info=True)
             return text
+

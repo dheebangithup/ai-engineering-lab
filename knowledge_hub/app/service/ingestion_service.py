@@ -140,6 +140,11 @@ class IngestionService:
             else:
                 app_logger.info("IngestionService: No chunks require embedding or vector store upsert (identical content).")
             
+            if is_update_flow:
+                app_logger.info(f"IngestionService: Bulk-updating doc_version payload in Qdrant for document_id={doc_meta.document_id} to '{doc_version}'.")
+                self.vector_store.update_payload_by_document(str(doc_meta.document_id), {"doc_version": doc_version})
+                app_logger.info("IngestionService: Finished bulk-updating Qdrant payload metadata.")
+
             # Save chunks metadata to relational database
             app_logger.info("IngestionService: Saving chunk metadata entities to relational database.")
 
@@ -182,6 +187,7 @@ class IngestionService:
 
 
     def update_doc(self, doc_meta: DocumentMetaDataEntity, chunks: list[Document]) -> list[Document]:
+        #       Incremental indexing approch  we used
         try:
             # Log the start of the page-level invalidation and update process
             app_logger.info("IngestionService: Starting update_doc process for identical configuration flow.")
@@ -260,7 +266,7 @@ class IngestionService:
             if min_edited_page is not None:
                 # Filter old chunks to identify those belonging to the lowest edited page or any subsequent page
                 chunks_to_delete = [
-                    x for x in old_metadata 
+                    x for x in old_metadata
                     if (x.page_number if x.page_number else 1) >= min_edited_page
                 ]
                 # Collect the chunk IDs of these obsolete/invalidated chunks
@@ -283,7 +289,7 @@ class IngestionService:
 
                 # Keep only newly parsed chunks that belong to the lowest edited page or any subsequent page
                 filtered_chunks = [
-                    x for x in chunks 
+                    x for x in chunks
                     if (x.metadata.page_number if x.metadata.page_number else 1) >= min_edited_page
                 ]
 
