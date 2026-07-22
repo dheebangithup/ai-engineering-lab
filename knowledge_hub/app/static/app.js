@@ -93,7 +93,31 @@ document.addEventListener('DOMContentLoaded', () => {
         ingestOutputStatus: document.getElementById('ingest-output-status'),
 
         // Toast Container
-        toastContainer: document.getElementById('toast-container')
+        toastContainer: document.getElementById('toast-container'),
+
+        // RAG Evaluation Form & Views
+        evalForm: document.getElementById('eval-form'),
+        evalRunName: document.getElementById('eval-run-name'),
+        evalType: document.getElementById('eval-type'),
+        evalDatasetEditor: document.getElementById('eval-dataset-editor'),
+        btnResetEvalJson: document.getElementById('btn-reset-eval-json'),
+        btnSubmitEval: document.getElementById('btn-submit-eval'),
+        btnRefreshEvals: document.getElementById('btn-refresh-evals'),
+        evalHistoryList: document.getElementById('eval-history-list'),
+        evalDetailedReport: document.getElementById('eval-detailed-report'),
+        btnBackToEvalHistory: document.getElementById('btn-back-to-eval-history'),
+        evalsTableBody: document.getElementById('evals-table-body'),
+        evalDetailsTableBody: document.getElementById('eval-details-body'),
+
+        // Report detail summaries
+        reportRunTitle: document.getElementById('report-run-title'),
+        reportRunMeta: document.getElementById('report-run-meta'),
+        reportRunDate: document.getElementById('report-run-date'),
+        valAvgFaithfulness: document.getElementById('val-avg-faithfulness'),
+        valAvgRelevance: document.getElementById('val-avg-relevance'),
+        valAvgRecall: document.getElementById('val-avg-recall'),
+        valAvgPrecision: document.getElementById('val-avg-precision'),
+        evalSchemaInfo: document.getElementById('eval-schema-info')
     };
 
     // ── Helper: Toast Notifications ───────────────────────────────────
@@ -134,6 +158,7 @@ document.addEventListener('DOMContentLoaded', () => {
             'tab-search': { title: 'RAG Semantic Search & LLM Playground', sub: 'Perform hybrid semantic search, context building, and LLM text generation' },
             'tab-documents': { title: 'Uploaded Document Registry', sub: 'Inspect stored PostgreSQL document metadata entities and page statistics' },
             'tab-ingest': { title: 'Document Ingestion Studio', sub: 'Parse, chunk, embed, and index enterprise documents into vector store' },
+            'tab-evaluation': { title: 'RAG Evaluation Center', sub: 'Run RAGAS benchmarks and review regression reports' },
             'tab-api-docs': { title: 'API Endpoint Specifications', sub: 'RESTful API documentation and schema endpoints' }
         };
 
@@ -144,6 +169,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (tabId === 'tab-documents') {
             fetchDocuments();
+        } else if (tabId === 'tab-evaluation') {
+            fetchEvaluationHistory();
+            initEvalForm();
         }
     }
 
@@ -708,10 +736,408 @@ document.addEventListener('DOMContentLoaded', () => {
             .replace(/'/g, '&#039;');
     }
 
+    // ── RAG Evaluation Center Logic ───────────────────────────────────
+    const DEFAULT_EVAL_JSON = {
+        static: [
+            {
+                "question": "What is the primary benefit of Multi-Head Attention?",
+                "contexts": [
+                    "Multi-head attention projects queries, keys, and values into multiple representation subspaces, executing scaled dot-product attention in parallel."
+                ],
+                "answer": "Multi-head attention allows the model to process sequence values in parallel across distinct linear projections.",
+                "ground_truth": "Multi-head attention projects Queries, Keys, and Values h times into different subspaces, executing scaled dot-product calculations in parallel."
+            }
+        ],
+        pipeline: [
+            {
+                "question": "What is the primary benefit of Multi-Head Attention?",
+                "ground_truth": "It projects queries, keys, and values to different subspaces, letting the network focus on sequence info at multiple positions in parallel."
+            },
+            {
+                "question": "What embedding dimensions are configured for Local LM Studio?",
+                "ground_truth": "It uses nomic-embed-text embedding model configured with a dimension length of 384."
+            }
+        ]
+    };
+
+    function initEvalForm() {
+        if (!DOM.evalDatasetEditor.value) {
+            updateEvalJsonTemplate();
+        }
+    }
+
+    function updateEvalJsonTemplate() {
+        const type = DOM.evalType.value;
+        const defaultData = DEFAULT_EVAL_JSON[type];
+        DOM.evalDatasetEditor.value = JSON.stringify(defaultData, null, 4);
+        
+        if (type === 'pipeline') {
+            DOM.evalSchemaInfo.style.background = 'rgba(59, 130, 246, 0.08)';
+            DOM.evalSchemaInfo.style.borderLeft = '3px solid var(--primary)';
+            DOM.evalSchemaInfo.style.color = '#93c5fd';
+            DOM.evalSchemaInfo.innerHTML = `
+                <i class="fa-solid fa-circle-info" style="margin-right: 0.5rem;"></i>
+                <strong>Dynamic RAG Mode:</strong> Enter questions and ground truths. The active pipeline will automatically search Qdrant and generate answers on-the-fly.
+                <ul style="margin-left: 1.25rem; margin-top: 0.25rem; font-size: 0.75rem; list-style-type: disc;">
+                    <li><code>question</code> (Required): Query text to search.</li>
+                    <li><code>ground_truth</code> (Required): Baseline reference answer.</li>
+                </ul>`;
+        } else {
+            DOM.evalSchemaInfo.style.background = 'rgba(16, 185, 129, 0.08)';
+            DOM.evalSchemaInfo.style.borderLeft = '3px solid var(--success)';
+            DOM.evalSchemaInfo.style.color = '#a7f3d0';
+            DOM.evalSchemaInfo.innerHTML = `
+                <i class="fa-solid fa-list-check" style="margin-right: 0.5rem;"></i>
+                <strong>Static Logs Mode:</strong> Paste pre-computed logs. No live search or LLM calls are made during evaluation.
+                <ul style="margin-left: 1.25rem; margin-top: 0.25rem; font-size: 0.75rem; list-style-type: disc;">
+                    <li><code>question</code> (Required) | <code>ground_truth</code> (Required)</li>
+                    <li><code>contexts</code> (Required): List of text chunks retrieved.</li>
+                    <li><code>answer</code> (Required): LLM answer text to evaluate.</li>
+                </ul>`;
+        }
+        console.log(`[Evaluation Center] Pre-filled JSON editor template for type: ${type}`);
+    }
+
+    DOM.evalType.addEventListener('change', () => {
+        updateEvalJsonTemplate();
+    });
+
+    DOM.btnResetEvalJson.addEventListener('click', () => {
+        updateEvalJsonTemplate();
+        showToast('JSON dataset editor reset to template.', 'info');
+    });
+
+    // ── API Function: Submit RAGAS Evaluation ────────────────────────
+    DOM.evalForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const runName = DOM.evalRunName.value.trim();
+        const evalType = DOM.evalType.value;
+        const editorText = DOM.evalDatasetEditor.value.trim();
+
+        if (!runName) {
+            showToast('Please provide a Run Description / Name.', 'error');
+            return;
+        }
+
+        let datasetParsed;
+        try {
+            datasetParsed = JSON.parse(editorText);
+            if (!Array.isArray(datasetParsed)) {
+                throw new Error("JSON root element must be a list / array.");
+            }
+        } catch (jsonErr) {
+            showToast(`JSON parsing failed: ${jsonErr.message}`, 'error');
+            return;
+        }
+
+        DOM.btnSubmitEval.disabled = true;
+        DOM.btnSubmitEval.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Running RAGAS Evaluation...`;
+        showToast("RAGAS Evaluation triggered. This will take a moment depending on dataset size...", "info");
+
+        // Prepare endpoint and payload
+        const isPipeline = evalType === 'pipeline';
+        const url = isPipeline ? '/api/v1/evaluate/pipeline' : '/api/v1/evaluate/static';
+        const payload = {
+            run_name: runName
+        };
+
+        if (isPipeline) {
+            payload.test_questions = datasetParsed;
+        } else {
+            payload.test_set = datasetParsed;
+        }
+
+        console.log(`[API Call] Triggering POST ${url} payload:`, payload);
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            const result = await response.json();
+            console.log('[API Response] Evaluation response:', result);
+
+            if (result.success && result.data) {
+                showToast(`Evaluation Run '${runName}' completed successfully!`, 'success');
+                DOM.evalRunName.value = '';
+                fetchEvaluationHistory();
+                viewEvaluationReport(result.data.run_id);
+            } else {
+                throw new Error(result.message || 'Evaluation run failed.');
+            }
+        } catch (err) {
+            console.error('[API Error] Evaluation failed:', err);
+            showToast(`Evaluation failed: ${err.message}`, 'error');
+        } finally {
+            DOM.btnSubmitEval.disabled = false;
+            DOM.btnSubmitEval.innerHTML = `<i class="fa-solid fa-play"></i> Trigger Evaluation Suite`;
+        }
+    });
+
+    // ── API Function: Fetch Evaluation Runs History ─────────────────
+    async function fetchEvaluationHistory() {
+        console.log('[API Call] Requesting GET /api/v1/evaluate/runs...');
+        DOM.evalsTableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="text-center py-4 text-muted">
+                    <i class="fa-solid fa-spinner fa-spin mr-2"></i> Loading historical runs...
+                </td>
+            </tr>`;
+
+        try {
+            const response = await fetch('/api/v1/evaluate/runs');
+            const result = await response.json();
+
+            if (result.success && Array.isArray(result.data)) {
+                renderEvaluationHistoryTable(result.data);
+                console.log(`[API Call] Successfully retrieved ${result.data.length} evaluation runs.`);
+            } else {
+                throw new Error(result.message || 'Failed to fetch evaluation history');
+            }
+        } catch (err) {
+            console.error('[API Error] Error fetching evaluation history:', err);
+            showToast(`Error fetching history: ${err.message}`, 'error');
+            DOM.evalsTableBody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="text-center py-4 text-danger">
+                        <i class="fa-solid fa-circle-exclamation mr-2"></i> ${err.message}
+                    </td>
+                </tr>`;
+        }
+    }
+
+    function renderEvaluationHistoryTable(runs) {
+        if (runs.length === 0) {
+            DOM.evalsTableBody.innerHTML = `
+                <tr>
+                    <td colspan="7" class="text-center py-4 text-muted">
+                        <i class="fa-solid fa-square-poll-vertical mr-2"></i> No evaluation runs saved yet. Trigger one on the left.
+                    </td>
+                </tr>`;
+            return;
+        }
+
+        DOM.evalsTableBody.innerHTML = runs.map(run => {
+            const created = run.created_at ? new Date(run.created_at).toLocaleString() : 'N/A';
+            const f = typeof run.avg_faithfulness === 'number' ? run.avg_faithfulness.toFixed(4) : 'N/A';
+            const rel = typeof run.avg_answer_relevance === 'number' ? run.avg_answer_relevance.toFixed(4) : 'N/A';
+            const rec = typeof run.avg_context_recall === 'number' ? run.avg_context_recall.toFixed(4) : 'N/A';
+            const prec = typeof run.avg_context_precision === 'number' ? run.avg_context_precision.toFixed(4) : 'N/A';
+
+            return `
+                <tr class="eval-run-row" data-id="${run.run_id}" style="cursor: pointer;">
+                    <td>
+                        <strong style="color: #60a5fa;"><i class="fa-solid fa-file-invoice"></i> ${escapeHtml(run.run_name || 'Evaluation Run')}</strong>
+                        <div style="font-size: 0.7rem; color: var(--text-dim); font-family: var(--font-mono);">${run.run_id}</div>
+                    </td>
+                    <td>
+                        <span class="badge badge-outline">${escapeHtml(run.provider.toUpperCase())}</span>
+                        <div style="font-size: 0.7rem; color: var(--text-muted); margin-top: 0.15rem;">${escapeHtml(run.eval_model)}</div>
+                    </td>
+                    <td class="${getScoreColorClass(run.avg_faithfulness)}">${f}</td>
+                    <td class="${getScoreColorClass(run.avg_answer_relevance)}">${rel}</td>
+                    <td class="${getScoreColorClass(run.avg_context_recall)}">${rec}</td>
+                    <td class="${getScoreColorClass(run.avg_context_precision)}">${prec}</td>
+                    <td style="font-size: 0.8rem; color: var(--text-muted);">${created}</td>
+                </tr>`;
+        }).join('');
+
+        // Attach click handlers to open detailed reports
+        document.querySelectorAll('.eval-run-row').forEach(row => {
+            row.addEventListener('click', () => {
+                const runId = row.getAttribute('data-id');
+                viewEvaluationReport(runId);
+            });
+        });
+    }
+
+    // Helper: score coloring based on standard thresholds
+    function getScoreColorClass(score) {
+        if (score === null || score === undefined || typeof score !== 'number') return '';
+        if (score >= 0.8) return 'score-high';
+        if (score >= 0.5) return 'score-med';
+        return 'score-low';
+    }
+
+    // ── API Function: View Detailed Evaluation Report ────────────────
+    async function viewEvaluationReport(runId) {
+        console.log(`[API Call] Requesting GET /api/v1/evaluate/runs/${runId}...`);
+        
+        // Hide history view, show detailed report with loaders
+        DOM.evalHistoryList.classList.add('hidden');
+        DOM.evalDetailedReport.classList.remove('hidden');
+        
+        DOM.reportRunTitle.textContent = "Loading run details...";
+        DOM.reportRunMeta.textContent = "";
+        DOM.reportRunDate.textContent = "";
+        DOM.valAvgFaithfulness.textContent = "0.0000";
+        DOM.valAvgRelevance.textContent = "0.0000";
+        DOM.valAvgRecall.textContent = "0.0000";
+        DOM.valAvgPrecision.textContent = "0.0000";
+        
+        DOM.evalDetailsTableBody.innerHTML = `
+            <tr>
+                <td colspan="5" class="text-center py-4 text-muted">
+                    <i class="fa-solid fa-spinner fa-spin mr-2"></i> Fetching individual query details...
+                </td>
+            </tr>`;
+
+        try {
+            const response = await fetch(`/api/v1/evaluate/runs/${runId}`);
+            const result = await response.json();
+
+            if (result.success && result.data) {
+                const run = result.data;
+                const created = run.created_at ? new Date(run.created_at).toLocaleString() : 'N/A';
+                
+                // Populate run details
+                DOM.reportRunTitle.innerHTML = `<i class="fa-solid fa-square-poll-vertical text-primary"></i> ${escapeHtml(run.run_name || 'Evaluation Report')}`;
+                DOM.reportRunMeta.textContent = `Provider: ${run.provider.toUpperCase()} | Model: ${run.eval_model}`;
+                DOM.reportRunDate.textContent = `Run Time: ${created}`;
+
+                // Populate aggregates (with score coloring classes)
+                DOM.valAvgFaithfulness.textContent = formatScoreValue(run.avg_faithfulness);
+                DOM.valAvgFaithfulness.className = `metric-value mt-1 ${getScoreColorClass(run.avg_faithfulness)}`;
+                
+                DOM.valAvgRelevance.textContent = formatScoreValue(run.avg_answer_relevance);
+                DOM.valAvgRelevance.className = `metric-value mt-1 ${getScoreColorClass(run.avg_answer_relevance)}`;
+                
+                DOM.valAvgRecall.textContent = formatScoreValue(run.avg_context_recall);
+                DOM.valAvgRecall.className = `metric-value mt-1 ${getScoreColorClass(run.avg_context_recall)}`;
+                
+                DOM.valAvgPrecision.textContent = formatScoreValue(run.avg_context_precision);
+                DOM.valAvgPrecision.className = `metric-value mt-1 ${getScoreColorClass(run.avg_context_precision)}`;
+
+                // Render individual query scores
+                renderDetailedResultsTable(run.individual_results || []);
+            } else {
+                throw new Error(result.message || 'Failed to fetch evaluation details');
+            }
+        } catch (err) {
+            console.error('[API Error] Failed to fetch run details:', err);
+            showToast(`Failed to load details: ${err.message}`, 'error');
+            DOM.evalDetailsTableBody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="text-center py-4 text-danger">
+                        <i class="fa-solid fa-circle-exclamation mr-2"></i> ${err.message}
+                    </td>
+                </tr>`;
+        }
+    }
+
+    function formatScoreValue(val) {
+        return typeof val === 'number' ? val.toFixed(4) : 'N/A';
+    }
+
+    function renderDetailedResultsTable(results) {
+        if (results.length === 0) {
+            DOM.evalDetailsTableBody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="text-center py-4 text-muted">
+                        No queries found in this evaluation report.
+                    </td>
+                </tr>`;
+            return;
+        }
+
+        let html = '';
+        results.forEach((res, idx) => {
+            const f = formatScoreValue(res.faithfulness);
+            const rel = formatScoreValue(res.answer_relevance);
+            const rec = formatScoreValue(res.context_recall);
+            const prec = formatScoreValue(res.context_precision);
+
+            // Double rows: Primary row for metrics, expandable row for question details
+            html += `
+                <tr class="eval-details-row-expandable" data-target="expand-row-${idx}">
+                    <td>
+                        <strong style="color: #fff;"><i class="fa-solid fa-angle-right expand-arrow mr-2"></i> ${escapeHtml(res.question)}</strong>
+                    </td>
+                    <td class="${getScoreColorClass(res.faithfulness)}">${f}</td>
+                    <td class="${getScoreColorClass(res.answer_relevance)}">${rel}</td>
+                    <td class="${getScoreColorClass(res.context_recall)}">${rec}</td>
+                    <td class="${getScoreColorClass(res.context_precision)}">${prec}</td>
+                </tr>
+                <tr id="expand-row-${idx}" class="eval-expanded-row hidden">
+                    <td colspan="5" class="eval-details-panel">
+                        <div class="eval-details-grid">
+                            <!-- Left: Ground Truth vs Answer -->
+                            <div class="eval-details-section">
+                                <h5><i class="fa-solid fa-clipboard-check text-success"></i> Synthesis Assessment</h5>
+                                <div class="mb-2">
+                                    <strong style="color: #3b82f6;">Expected Ground Truth:</strong>
+                                    <div class="eval-details-content text-muted">${escapeHtml(res.ground_truth || 'None provided')}</div>
+                                </div>
+                                <div>
+                                    <strong style="color: #10b981;">Generated Answer:</strong>
+                                    <div class="eval-details-content">${escapeHtml(res.answer)}</div>
+                                </div>
+                            </div>
+                            
+                            <!-- Right: Retrieved Chunks -->
+                            <div class="eval-details-section">
+                                <h5><i class="fa-solid fa-database text-primary"></i> Retrieved Context Chunks</h5>
+                                <div class="eval-details-content">
+                                    ${res.contexts && res.contexts.length > 0 ? 
+                                        res.contexts.map((ctx, cIdx) => `
+                                            <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">
+                                                <strong style="color: var(--primary);">Chunk #${cIdx + 1}:</strong>
+                                                <p style="margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem;">${escapeHtml(ctx)}</p>
+                                            </div>`).join('')
+                                        : 'No context retrieved for this query.'
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>`;
+        });
+
+        DOM.evalDetailsTableBody.innerHTML = html;
+
+        // Attach expand events
+        document.querySelectorAll('.eval-details-row-expandable').forEach(row => {
+            row.addEventListener('click', () => {
+                const targetId = row.getAttribute('data-target');
+                const expandRow = document.getElementById(targetId);
+                const arrow = row.querySelector('.expand-arrow');
+                const isHidden = expandRow.classList.contains('hidden');
+
+                // Toggle visibility
+                expandRow.classList.toggle('hidden', !isHidden);
+                row.classList.toggle('eval-expanded-row', isHidden);
+
+                // Rotate arrow icon
+                if (arrow) {
+                    if (isHidden) {
+                        arrow.className = "fa-solid fa-angle-down expand-arrow mr-2";
+                    } else {
+                        arrow.className = "fa-solid fa-angle-right expand-arrow mr-2";
+                    }
+                }
+            });
+        });
+    }
+
+    DOM.btnBackToEvalHistory.addEventListener('click', () => {
+        DOM.evalDetailedReport.classList.add('hidden');
+        DOM.evalHistoryList.classList.remove('hidden');
+    });
+
+    DOM.btnRefreshEvals.addEventListener('click', () => {
+        fetchEvaluationHistory();
+    });
+
     // ── Global Refresh Button Listener ──────────────────────────────
     DOM.btnRefreshAll.addEventListener('click', () => {
         showToast('Refreshing application state...', 'info');
         fetchDocuments();
+        if (AppState.currentTab === 'tab-evaluation') {
+            fetchEvaluationHistory();
+        }
     });
 
     DOM.btnRefreshDocs.addEventListener('click', () => {

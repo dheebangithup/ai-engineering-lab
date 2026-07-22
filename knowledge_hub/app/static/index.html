@@ -45,6 +45,10 @@
                     <i class="fa-solid fa-cloud-arrow-up"></i>
                     <span>Ingestion Studio</span>
                 </button>
+                <button class="nav-item" data-tab="tab-evaluation">
+                    <i class="fa-solid fa-square-poll-vertical"></i>
+                    <span>Evaluation Center</span>
+                </button>
                 <button class="nav-item" data-tab="tab-api-docs">
                     <i class="fa-solid fa-code"></i>
                     <span>API Reference</span>
@@ -526,7 +530,155 @@
                 </div>
             </section>
 
-            <!-- Tab 4: API Reference -->
+            <!-- Tab 4: RAG Evaluation Center -->
+            <section id="tab-evaluation" class="tab-pane">
+                <div class="grid-layout search-grid">
+                    <!-- Left Column: Trigger Evaluation Panel -->
+                    <div class="card search-control-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-square-poll-vertical"></i> Run RAGAS Evaluation</h3>
+                        </div>
+                        <form id="eval-form" class="card-body">
+                            <div class="form-group">
+                                <label for="eval-run-name">Run Description / Name</label>
+                                <input type="text" id="eval-run-name" placeholder="e.g. CLI Dynamic Pipeline Run" required>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="eval-type">Evaluation Profile Type</label>
+                                <select id="eval-type">
+                                    <option value="pipeline" selected>Dynamic RAG Pipeline (Live Retrieval & LLM)</option>
+                                    <option value="static">Static Dataset Logs (Pre-computed Context/Answer)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group" id="eval-schema-info-wrapper">
+                                <div id="eval-schema-info" style="padding: 0.85rem 1rem; border-radius: var(--radius-md); font-size: 0.8rem; line-height: 1.5; background: rgba(59, 130, 246, 0.08); border-left: 3px solid var(--primary); color: #93c5fd;">
+                                    <!-- Filled dynamically in app.js -->
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <div class="space-between mb-1">
+                                    <label for="eval-dataset-editor">Test Dataset (JSON Format)</label>
+                                    <button type="button" class="btn btn-secondary btn-xs" id="btn-reset-eval-json">
+                                        <i class="fa-solid fa-arrow-rotate-left"></i> Reset Template
+                                    </button>
+                                </div>
+                                <textarea id="eval-dataset-editor" rows="16" class="code-input" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem;" required></textarea>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary btn-block btn-lg" id="btn-submit-eval">
+                                <i class="fa-solid fa-play"></i> Trigger Evaluation Suite
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Right Column: Evaluation History & Reports -->
+                    <div class="results-workspace">
+                        <div class="card">
+                            <div class="card-header space-between">
+                                <h3 id="eval-right-panel-title"><i class="fa-solid fa-clock-history"></i> Evaluation History Reports</h3>
+                                <button class="btn btn-secondary btn-sm" id="btn-refresh-evals">
+                                    <i class="fa-solid fa-rotate"></i> Refresh History
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <!-- History List View -->
+                                <div id="eval-history-list" class="eval-list-container">
+                                    <div class="table-responsive">
+                                        <table class="data-table" id="evals-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Run Name</th>
+                                                    <th>Provider</th>
+                                                    <th>Avg Faith.</th>
+                                                    <th>Avg Rel.</th>
+                                                    <th>Avg Rec.</th>
+                                                    <th>Avg Prec.</th>
+                                                    <th>Run Date</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="evals-table-body">
+                                                <tr>
+                                                    <td colspan="7" class="text-center py-4 text-muted">
+                                                        <i class="fa-solid fa-spinner fa-spin mr-2"></i> Loading historical runs...
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+
+                                <!-- Detailed Report View (Hidden by default) -->
+                                <div id="eval-detailed-report" class="eval-report-details hidden">
+                                    <button class="btn btn-secondary btn-sm mb-3" id="btn-back-to-eval-history">
+                                        <i class="fa-solid fa-arrow-left"></i> Back to History
+                                    </button>
+                                    
+                                    <div class="report-run-header mb-3">
+                                        <h4 id="report-run-title" class="mb-1">PR #42 Regression Run</h4>
+                                        <div class="text-muted text-sm">
+                                            <span id="report-run-meta">Model: qwen2.5-7b-instruct-1m:3 | Provider: lm_studio</span>
+                                            <span class="mx-2">|</span>
+                                            <span id="report-run-date">2026-07-22 20:30:15</span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Overall Metric Score Cards -->
+                                    <div class="grid-layout cols-4 mb-4">
+                                        <div class="card metric-card" id="card-avg-faithfulness">
+                                            <div class="card-body text-center">
+                                                <span class="metric-label">Faithfulness</span>
+                                                <h2 class="metric-value mt-1" id="val-avg-faithfulness">0.0000</h2>
+                                            </div>
+                                        </div>
+                                        <div class="card metric-card" id="card-avg-relevance">
+                                            <div class="card-body text-center">
+                                                <span class="metric-label">Answer Relevance</span>
+                                                <h2 class="metric-value mt-1" id="val-avg-relevance">0.0000</h2>
+                                            </div>
+                                        </div>
+                                        <div class="card metric-card" id="card-avg-recall">
+                                            <div class="card-body text-center">
+                                                <span class="metric-label">Context Recall</span>
+                                                <h2 class="metric-value mt-1" id="val-avg-recall">0.0000</h2>
+                                            </div>
+                                        </div>
+                                        <div class="card metric-card" id="card-avg-precision">
+                                            <div class="card-body text-center">
+                                                <span class="metric-label">Context Precision</span>
+                                                <h2 class="metric-value mt-1" id="val-avg-precision">0.0000</h2>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Detailed Table -->
+                                    <h4>Question breakdown & metric scores</h4>
+                                    <div class="table-responsive mt-2">
+                                        <table class="data-table" id="eval-details-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>Question</th>
+                                                    <th>Faithfulness</th>
+                                                    <th>Answer Rel.</th>
+                                                    <th>Context Rec.</th>
+                                                    <th>Context Prec.</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="eval-details-body">
+                                                <!-- Row entries loaded dynamically -->
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 5: API Reference -->
             <section id="tab-api-docs" class="tab-pane">
                 <div class="card">
                     <div class="card-header space-between">

@@ -1,0 +1,162 @@
+[
+    {
+        "question": "What is the key proposal of the Transformer architecture?",
+        "contexts": [
+            "We propose a new simple network architecture, the Transformer, based solely on attention mechanisms, dispensing with recurrence and convolutions entirely."
+        ],
+        "answer": "The Transformer is a network architecture that relies entirely on self-attention mechanisms to draw global dependencies between inputs and outputs, bypassing recurrence and convolutions completely.",
+        "ground_truth": "The Transformer architecture dispenses with recurrence and convolutions entirely, proposing a sequence transduction model based solely on attention mechanisms to connect encoders and decoders."
+    },
+    {
+        "question": "What BLEU score did the Transformer achieve on WMT 2014 English-to-German translation task?",
+        "contexts": [
+            "Our model achieves 28.4 BLEU on the WMT 2014 English-to-German translation task, improving over the existing best results, including ensembles, by over 2 BLEU."
+        ],
+        "answer": "The Transformer model achieved a BLEU score of 28.4 on the WMT 2014 English-to-German task.",
+        "ground_truth": "The Transformer achieved 28.4 BLEU on the WMT 2014 English-to-German translation task, outperforming previous best models and ensembles."
+    },
+    {
+        "question": "Why do recurrent sequence transduction models struggle with parallelization?",
+        "contexts": [
+            "Aligning the positions to steps in computation time, they generate a sequence of hidden states ht, as a function of the previous hidden state ht−1 and the input for position t. This inherently sequential nature precludes parallelization within training examples..."
+        ],
+        "answer": "Recurrent models generate hidden states sequentially, depending on the previous step's hidden state, which prevents parallelization within training examples.",
+        "ground_truth": "The sequential nature of RNNs aligns positions with time steps, meaning state ht depends on ht-1. This prevents parallelization during training, especially at longer sequence lengths."
+    },
+    {
+        "question": "How does the Transformer reduce the number of operations to relate signals between distant positions?",
+        "contexts": [
+            "In these models, the number of operations required to relate signals from two arbitrary input or output positions grows in the distance between positions... In the Transformer this is reduced to a constant number of operations..."
+        ],
+        "answer": "It reduces operations to a constant number of operations by bypassing recurrent steps and using self-attention.",
+        "ground_truth": "The Transformer reduces the operations required to relate signals from two arbitrary positions to a constant number of operations, counteracting the resolution loss using Multi-Head Attention."
+    },
+    {
+        "question": "How many identical layers compose the encoder in the Transformer?",
+        "contexts": [
+            "Encoder: The encoder is composed of a stack of N = 6 identical layers."
+        ],
+        "answer": "The encoder stack contains 6 identical layers.",
+        "ground_truth": "The Transformer encoder consists of N = 6 identical layers."
+    },
+    {
+        "question": "What are the sub-layers present in each Transformer encoder layer?",
+        "contexts": [
+            "Each layer has two sub-layers. The first is a multi-head self-attention mechanism, and the second is a simple, position-wise fully connected feed-forward network."
+        ],
+        "answer": "Each encoder layer is made up of a multi-head self-attention mechanism and a position-wise fully connected feed-forward network.",
+        "ground_truth": "Each encoder layer contains two sub-layers: a multi-head self-attention sub-layer and a position-wise feed-forward network sub-layer, with residual connections and layer normalization."
+    },
+    {
+        "question": "How does the decoder prevent positions from attending to subsequent positions?",
+        "contexts": [
+            "We also modify the self-attention sub-layer in the decoder stack to prevent positions from attending to subsequent positions. This masking, combined with fact that the output embeddings are offset by one position, ensures that the predictions for position i can depend only on the known outputs at positions less than i."
+        ],
+        "answer": "The decoder prevents future positions from being attended to by applying masking inside the scaled dot-product attention, setting illegal connections to negative infinity.",
+        "ground_truth": "Masking is applied in the decoder self-attention to set illegal future connections to negative infinity, ensuring predictions at position i depend only on outputs at positions less than i."
+    },
+    {
+        "question": "What is the mathematical formula for Scaled Dot-Product Attention?",
+        "contexts": [
+            "Attention(Q, K, V ) = softmax(QKT / sqrt(dk))V"
+        ],
+        "answer": "Attention is calculated as the softmax of (Q * K^T / sqrt(dk)) multiplied by V.",
+        "ground_truth": "The equation is Attention(Q, K, V) = softmax(Q * K^T / sqrt(dk)) * V."
+    },
+    {
+        "question": "Why is scaling by 1/sqrt(dk) necessary in Scaled Dot-Product Attention?",
+        "contexts": [
+            "We suspect that for large values of dk, the dot products grow large in magnitude, pushing the softmax function into regions where it has extremely small gradients. To counteract this effect, we scale the dot products by 1/sqrt(dk)."
+        ],
+        "answer": "For large key dimensions, dot products grow massive, causing softmax to yield very small gradients. Scaling resolves this problem.",
+        "ground_truth": "Scaling by 1/sqrt(dk) is used because large values of dk cause dot products to grow large, pushing the softmax function into regions with extremely small gradients."
+    },
+    {
+        "question": "What values of h, dk, and dv were used in the parallel attention heads of the base Transformer model?",
+        "contexts": [
+            "In this work we employ h = 8 parallel attention layers, or heads. For each of these we use dk = dv = dmodel/h = 64."
+        ],
+        "answer": "The base model uses h = 8 attention heads, with key and value dimensions dk = dv = 64.",
+        "ground_truth": "The Transformer base model employs h = 8 parallel attention heads, with key and value dimensions dk = dv = dmodel/h = 64."
+    },
+    {
+        "question": "In what three ways is multi-head attention applied in the Transformer model?",
+        "contexts": [
+            "The Transformer uses multi-head attention in three different ways: In encoder-decoder attention layers, the queries come from the previous decoder layer... The encoder contains self-attention layers... self-attention layers in the decoder..."
+        ],
+        "answer": "Multi-head attention is used as encoder-decoder attention, encoder self-attention, and decoder self-attention.",
+        "ground_truth": "Multi-head attention is applied as: (1) encoder-decoder attention (queries from decoder, keys/values from encoder), (2) encoder self-attention, and (3) decoder self-attention."
+    },
+    {
+        "question": "What is the structure of the position-wise feed-forward networks (FFN)?",
+        "contexts": [
+            "This consists of two linear transformations with a ReLU activation in between. FFN(x) = max(0, xW1 + b1)W2 + b2"
+        ],
+        "answer": "The FFN consists of two linear transformations with a ReLU activation function in between, mapping to max(0, xW1 + b1)W2 + b2.",
+        "ground_truth": "The FFN is a position-wise layer consisting of two linear transformations with a ReLU activation: FFN(x) = max(0, xW1 + b1)W2 + b2."
+    },
+    {
+        "question": "What are the input and inner-layer dimensionalities of the position-wise feed-forward network in the base model?",
+        "contexts": [
+            "The dimensionality of input and output is dmodel = 512, and the inner-layer has dimensionality dff = 2048."
+        ],
+        "answer": "The input/output dimensionality is 512, while the inner hidden layer dimensionality is 2048.",
+        "ground_truth": "The FFN has an input and output dimensionality of dmodel = 512, and an inner-layer hidden dimensionality of dff = 2048."
+    },
+    {
+        "question": "How does the Transformer represent order without recurrence or convolutions?",
+        "contexts": [
+            "Since our model contains no recurrence and no convolution, in order for the model to make use of the order of the sequence, we must inject some information about the relative or absolute position of the tokens... we add 'positional encodings' to the input embeddings..."
+        ],
+        "answer": "The Transformer represents position by adding sinusoidal positional encodings directly to the input embeddings.",
+        "ground_truth": "The Transformer injects sequence order by adding sinusoidal positional encodings of different frequencies to the input embeddings."
+    },
+    {
+        "question": "What functions are used to calculate the positional encodings in the Transformer?",
+        "contexts": [
+            "we use sine and cosine functions of different frequencies: PE(pos, 2i) = sin(pos/10000^(2i/dmodel)) and PE(pos, 2i+1) = cos(pos/10000^(2i/dmodel))"
+        ],
+        "answer": "It uses sine and cosine functions of geometric progression frequencies to compute the positional encodings.",
+        "ground_truth": "Positional encodings are calculated using sine and cosine functions: PE(pos, 2i) = sin(pos/10000^(2i/dmodel)) and PE(pos, 2i+1) = cos(pos/10000^(2i/dmodel))."
+    },
+    {
+        "question": "What is the computational complexity per layer of a self-attention layer compared to a recurrent layer?",
+        "contexts": [
+            "Self-Attention: O(n^2 * d) complexity per layer, Recurrent: O(n * d^2) complexity per layer."
+        ],
+        "answer": "Self-attention has a per-layer complexity of O(n^2 * d), whereas recurrent layers have a complexity of O(n * d^2).",
+        "ground_truth": "Self-attention has a computational complexity of O(n^2 * d) per layer, while recurrent layers have O(n * d^2) per layer complexity."
+    },
+    {
+        "question": "What training dataset was used for WMT 2014 English-to-German translation task?",
+        "contexts": [
+            "We trained on the standard WMT 2014 English-German dataset consisting of about 4.5 million sentence pairs."
+        ],
+        "answer": "The training dataset consists of 4.5 million sentence pairs from the standard WMT 2014 English-German dataset.",
+        "ground_truth": "The model was trained on the standard WMT 2014 English-to-German dataset containing approximately 4.5 million sentence pairs."
+    },
+    {
+        "question": "What hardware was used to train the base Transformer models, and how long did it take?",
+        "contexts": [
+            "We trained our models on one machine with 8 NVIDIA P100 GPUs... We trained the base models for a total of 100,000 steps or 12 hours."
+        ],
+        "answer": "Base models were trained on 8 NVIDIA P100 GPUs for 12 hours (100,000 steps).",
+        "ground_truth": "The base Transformer models were trained for 12 hours (100,000 steps) on a single machine equipped with 8 NVIDIA P100 GPUs."
+    },
+    {
+        "question": "What optimizer was used to train the Transformer models?",
+        "contexts": [
+            "We used the Adam optimizer [17] with beta1 = 0.9, beta2 = 0.98 and epsilon = 10^-9."
+        ],
+        "answer": "The Adam optimizer was used, with beta1=0.9, beta2=0.98, and epsilon=10^-9.",
+        "ground_truth": "The model was trained using the Adam optimizer with parameters beta1 = 0.9, beta2 = 0.98, and epsilon = 10^-9."
+    },
+    {
+        "question": "What rate of regularization residual dropout was used for the base Transformer model?",
+        "contexts": [
+            "For the base model, we use a rate of Pdrop = 0.1."
+        ],
+        "answer": "A residual dropout rate of 0.1 was applied to the base Transformer model.",
+        "ground_truth": "The base model uses a residual dropout regularization rate of Pdrop = 0.1."
+    }
+]

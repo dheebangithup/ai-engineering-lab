@@ -25,6 +25,11 @@ class AppSettings(BaseSettings):
     DEFAULT_SCORE_THRESHOLD: float = 0.7
     DEFAULT_TOP_K: int = 5
 
+    # Evaluation Settings
+    RAGAS_EVAL_PROVIDER: str = "lm_studio"  # "groq" | "openai" | "lm_studio"
+    RAGAS_EVAL_MODEL: str = "qwen2.5-7b-instruct-1m:3"
+
+
     # Configurable Indexed Payload Fields for Qdrant Metadata Filtering
     INDEXED_PAYLOAD_FIELDS: dict[str, str] = {
         "document_id": "keyword",

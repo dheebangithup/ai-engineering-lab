@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
         startup_logger.info("Application starting up. Initializing resources...")
         from knowledge_hub.app.entity.document_metadata import DocumentMetaDataEntity
         from knowledge_hub.app.entity.chunk_metadata import ChunkMetaDataEntity
+        from knowledge_hub.app.entity.evaluation import EvaluationRunEntity, EvaluationResultEntity
         startup_logger.info("Checking/Creating database tables (if they do not already exist)...")
         Base.metadata.create_all(bind=engine)
         startup_logger.info("Database tables verified/created successfully.")
@@ -383,6 +384,186 @@ async def search_documents(
         app_logger.error(f"Search failed for query: '{request.query}'", exc_info=True)
         return ResponseBuilder.failure(
             message=f"Search failed: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+# --- Evaluation Request Schemas ---
+class EvalQueryItem(BaseModel):
+    question: str = Field(..., description="The query sent to the RAG system")
+    contexts: List[str] = Field(..., description="The retrieved context chunks")
+    answer: str = Field(..., description="The system generated response")
+    ground_truth: str = Field(..., description="The actual expected answer")
+
+class EvaluationPayload(BaseModel):
+    run_name: Optional[str] = Field(None, description="Descriptive label for this evaluation run")
+    test_set: List[EvalQueryItem] = Field(..., description="List of queries, contexts, and answers to evaluate")
+
+class DynamicEvalQueryItem(BaseModel):
+    question: str = Field(..., description="The query to run through the RAG system")
+    ground_truth: str = Field(..., description="The actual expected answer")
+
+class DynamicEvaluationPayload(BaseModel):
+    run_name: Optional[str] = Field(None, description="Descriptive label for this evaluation run")
+    test_questions: List[DynamicEvalQueryItem] = Field(..., description="List of queries and ground truths to run through RAG and evaluate")
+
+
+# --- Evaluation Endpoints ---
+@app.post(
+    "/api/v1/evaluate/static",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    tags=["Evaluation"],
+    summary="Evaluate static logs or datasets",
+    description="Computes Ragas metrics on pre-retrieved contexts and pre-generated answers, saving results to history."
+)
+async def evaluate_rag_static(
+    payload: EvaluationPayload,
+    db: Session = Depends(get_db)
+):
+    from knowledge_hub.app.service.evaluation_service import EvaluationService
+    app_logger.info(f"API Endpoint: POST /api/v1/evaluate/static called with {len(payload.test_set)} items.")
+    try:
+        service = EvaluationService(db)
+        test_set_dicts = [item.dict() for item in payload.test_set]
+        results = service.run_evaluation(test_set_dicts, run_name=payload.run_name)
+        app_logger.info(f"Static evaluation completed successfully. Run ID: {results.get('run_id')}")
+        return ResponseBuilder.success(data=results, message="Static evaluation completed successfully.")
+    except Exception as e:
+        app_logger.error("Ragas static evaluation failed", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Evaluation failed: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.post(
+    "/api/v1/evaluate/pipeline",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    tags=["Evaluation"],
+    summary="Evaluate active RAG pipeline on-the-fly",
+    description="Retrieves contexts, generates responses, and evaluates the performance on a set of questions."
+)
+async def evaluate_rag_pipeline(
+    payload: DynamicEvaluationPayload,
+    db: Session = Depends(get_db),
+    retrieval_service = Depends(get_retrieval_service)
+):
+    from knowledge_hub.app.service.evaluation_service import EvaluationService
+    app_logger.info(f"API Endpoint: POST /api/v1/evaluate/pipeline called with {len(payload.test_questions)} questions.")
+    try:
+        service = EvaluationService(db)
+        test_questions_dicts = [item.dict() for item in payload.test_questions]
+        results = service.run_dynamic_pipeline_evaluation(
+            retrieval_service=retrieval_service,
+            test_questions=test_questions_dicts,
+            run_name=payload.run_name
+        )
+        app_logger.info(f"Pipeline evaluation completed successfully. Run ID: {results.get('run_id')}")
+        return ResponseBuilder.success(data=results, message="Pipeline evaluation completed successfully.")
+    except Exception as e:
+        app_logger.error("Ragas pipeline evaluation failed", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Pipeline evaluation failed: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.get(
+    "/api/v1/evaluate/runs",
+    response_model=ApiResponse[List[dict]],
+    status_code=status.HTTP_200_OK,
+    tags=["Evaluation"],
+    summary="List all evaluation runs",
+    description="Retrieves history of overall evaluation runs stored in the database."
+)
+async def list_evaluation_runs(
+    db: Session = Depends(get_db)
+):
+    from knowledge_hub.app.entity.evaluation import EvaluationRunEntity
+    app_logger.info("API Endpoint: GET /api/v1/evaluate/runs requested.")
+    try:
+        runs = db.query(EvaluationRunEntity).order_by(EvaluationRunEntity.created_at.desc()).all()
+        result = []
+        for r in runs:
+            created_str = r.created_at.isoformat() if r.created_at else None
+            result.append({
+                "run_id": str(r.run_id),
+                "run_name": r.run_name,
+                "provider": r.provider,
+                "eval_model": r.eval_model,
+                "avg_faithfulness": r.avg_faithfulness,
+                "avg_answer_relevance": r.avg_answer_relevance,
+                "avg_context_recall": r.avg_context_recall,
+                "avg_context_precision": r.avg_context_precision,
+                "created_at": created_str
+            })
+        app_logger.info(f"Successfully retrieved {len(result)} evaluation runs.")
+        return ResponseBuilder.success(data=result, message=f"Successfully fetched {len(result)} runs")
+    except Exception as e:
+        app_logger.error("Failed to list evaluation runs", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to fetch runs: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.get(
+    "/api/v1/evaluate/runs/{run_id}",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    tags=["Evaluation"],
+    summary="Get details of a specific evaluation run",
+    description="Retrieves overall scores and query-by-query breakdown of evaluation results."
+)
+async def get_evaluation_run_details(
+    run_id: str,
+    db: Session = Depends(get_db)
+):
+    from knowledge_hub.app.entity.evaluation import EvaluationRunEntity
+    app_logger.info(f"API Endpoint: GET /api/v1/evaluate/runs/{run_id} requested.")
+    try:
+        run = db.query(EvaluationRunEntity).filter(EvaluationRunEntity.run_id == run_id).first()
+        if not run:
+            app_logger.warning(f"Evaluation run '{run_id}' not found.")
+            return ResponseBuilder.failure(
+                message=f"Evaluation run with ID '{run_id}' not found",
+                error_code=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Build individual test query details list
+        individual_results = []
+        for res in run.results:
+            individual_results.append({
+                "result_id": str(res.result_id),
+                "question": res.question,
+                "contexts": res.contexts,
+                "answer": res.answer,
+                "ground_truth": res.ground_truth,
+                "faithfulness": res.faithfulness,
+                "answer_relevance": res.answer_relevance,
+                "context_recall": res.context_recall,
+                "context_precision": res.context_precision
+            })
+            
+        created_str = run.created_at.isoformat() if run.created_at else None
+        
+        result_data = {
+            "run_id": str(run.run_id),
+            "run_name": run.run_name,
+            "provider": run.provider,
+            "eval_model": run.eval_model,
+            "avg_faithfulness": run.avg_faithfulness,
+            "avg_answer_relevance": run.avg_answer_relevance,
+            "avg_context_recall": run.avg_context_recall,
+            "avg_context_precision": run.avg_context_precision,
+            "created_at": created_str,
+            "individual_results": individual_results
+        }
+        
+        app_logger.info(f"Successfully retrieved details for evaluation run '{run_id}' with {len(individual_results)} individual scores.")
+        return ResponseBuilder.success(data=result_data, message="Successfully fetched run details")
+    except Exception as e:
+        app_logger.error(f"Failed to fetch details for evaluation run '{run_id}'", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to fetch run details: {str(e)}",
             error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
