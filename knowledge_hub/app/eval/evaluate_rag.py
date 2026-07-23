@@ -12,6 +12,8 @@ logger = logging.getLogger("evaluate_runner")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_dir)))
 sys.path.append(project_root)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+dataset_path = os.path.join(os.path.dirname(os.path.dirname(script_dir)), "data", "attention_golden_set.json")
 
 try:
     from knowledge_hub.app.config.database import SessionLocal
@@ -27,8 +29,7 @@ def run_static_test(evaluator: EvaluationService):
     logger.info("Starting static dataset offline evaluation...")
     
     # Resolve path to the generated golden dataset JSON
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    dataset_path = os.path.join(os.path.dirname(os.path.dirname(script_dir)), "data", "attention_golden_set.json")
+
     
     logger.info(f"Loading test dataset from: {dataset_path}")
     try:
@@ -141,8 +142,8 @@ def main():
         evaluator = EvaluationService(db)
         
         # Run both evaluation profiles
-        run_static_test(evaluator)
-        # run_dynamic_test(evaluator, db)
+        # run_static_test(evaluator)
+        run_dynamic_test(evaluator, db)
         
     except Exception as main_err:
         logger.error(f"Failed to execute evaluations: {main_err}")

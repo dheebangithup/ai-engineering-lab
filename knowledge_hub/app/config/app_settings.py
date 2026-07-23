@@ -19,15 +19,19 @@ class AppSettings(BaseSettings):
     GROQ_VISION_MODEL:str='llama-3.1-8b-instant'
 
     POSTGRES_URL: str = ''
+    
+    # LLM Settings for the RAG Retrieval Pipeline
+    LLM_PROVIDER: str = 'lm_studio'  # "groq" | "openai" | "lm_studio"
+    LLM_MODEL: str = 'qwen2.5-7b-instruct-1m:3'
 
     # Context & Retrieval Settings
     MAX_CONTEXT_TOKENS: int = 6000
-    DEFAULT_SCORE_THRESHOLD: float = 0.7
+    DEFAULT_SCORE_THRESHOLD: float = 0.6
     DEFAULT_TOP_K: int = 5
 
     # Evaluation Settings
-    RAGAS_EVAL_PROVIDER: str = "lm_studio"  # "groq" | "openai" | "lm_studio"
-    RAGAS_EVAL_MODEL: str = "qwen2.5-7b-instruct-1m:3"
+    RAGAS_EVAL_PROVIDER: str = "groq"  # "groq" | "openai" | "lm_studio"
+    RAGAS_EVAL_MODEL: str = "llama-3.1-8b-instant"
 
 
     # Configurable Indexed Payload Fields for Qdrant Metadata Filtering

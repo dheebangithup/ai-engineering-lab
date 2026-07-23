@@ -61,12 +61,11 @@ class EvaluationService:
         try:
             # 1. Initialize Evaluator LLM
             if provider == "groq":
-                if not app_settings.GROQ_API_KEY:
-                    logger.error("Failed to initialize Groq evaluator: GROQ_API_KEY is not configured")
-                    raise ValueError("Groq API key is missing in configuration.")
+                
+                logger.info(f"Initializing ChatGroq evaluator model='{app_settings.GROQ_VISION_MODEL}'")
                 llm = ChatGroq(
                     api_key=app_settings.GROQ_API_KEY,
-                    model=model or "llama-3-70b-8192",
+                    model=app_settings.GROQ_VISION_MODEL,
                     temperature=0.0
                 )
             elif provider == "lm_studio":

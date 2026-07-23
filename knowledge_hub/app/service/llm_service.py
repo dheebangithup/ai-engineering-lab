@@ -38,38 +38,91 @@ class LLMGenerationResult:
 
 class LlmService:
     """
-    Enterprise LLM Service wrapper for LangChain ChatOpenAI.
+    Enterprise LLM Service wrapper for LangChain ChatOpenAI and ChatGroq.
 
     Constructor accepts overrides or defaults to configuration in app_settings.
     """
 
     def __init__(
         self,
+        provider: str | None = None,
         base_url: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
         temperature: float | None = None,
     ):
-        self._base_url = base_url or app_settings.LOCAL_LM_URL
-        self._api_key = api_key or app_settings.LOCAL_LM_API_KEY
-        self._model = model or app_settings.LOCAL_LM_CHAT_MODEL
+        self._provider = provider or app_settings.LLM_PROVIDER
+        self._base_url = base_url
+        self._api_key = api_key
+        self._model = model or app_settings.LLM_MODEL
         self._temperature = (
             temperature if temperature is not None else app_settings.LOCAL_LM_TEMPERATURE
         )
 
         logger.info(
-            "LlmService: initialized | base_url='%s' model='%s' temperature=%.2f",
-            self._base_url,
+            "LlmService: initializing | provider='%s' model='%s' temperature=%.2f",
+            self._provider,
             self._model,
             self._temperature,
         )
 
-        self._chat_model = ChatOpenAI(
-            base_url=self._base_url,
-            api_key=self._api_key,
+        self._chat_model, self._resolved_model_name = self._create_model(
+            provider=self._provider,
             model=self._model,
             temperature=self._temperature,
+            api_key=self._api_key,
+            base_url=self._base_url
         )
+
+    def _create_model(
+        self,
+        provider: str,
+        model: str,
+        temperature: float,
+        api_key: str | None = None,
+        base_url: str | None = None
+    ) -> tuple[Any, str]:
+        """
+        Instantiates the underlying LangChain chat client and resolves the target model name.
+        """
+        prov = provider.lower()
+        if prov == "groq":
+            from langchain_groq import ChatGroq
+            key = api_key or app_settings.GROQ_API_KEY
+            if not key:
+                logger.error("LlmService initialization failed: GROQ_API_KEY is not configured")
+                raise ValueError("Groq API key is missing in configuration.")
+            
+            # Default model for Groq if not specified or standard default model
+            m = model
+            if m == "qwen2.5-7b-instruct-1m:3" or not m:
+                # If model is the default LM Studio qwen, override with llama-3.1-8b-instant for Groq
+                m = "llama-3.1-8b-instant"
+                
+            logger.info("Initializing ChatGroq client model='%s' temp=%.2f", m, temperature)
+            return ChatGroq(
+                api_key=key,
+                model=m,
+                temperature=temperature
+            ), m
+        elif prov == "openai":
+            logger.info("Initializing ChatOpenAI client model='%s' temp=%.2f", model, temperature)
+            return ChatOpenAI(
+                model=model or "gpt-4-turbo",
+                temperature=temperature
+            ), model or "gpt-4-turbo"
+        else:
+            # default to lm_studio / OpenAI local endpoint
+            url = base_url or app_settings.LOCAL_LM_URL
+            key = api_key or app_settings.LOCAL_LM_API_KEY or "lm-studio"
+            m = model or app_settings.LOCAL_LM_CHAT_MODEL
+            logger.info("Initializing ChatOpenAI client pointing to Local LM Studio: url='%s' model='%s' temp=%.2f", url, m, temperature)
+            return ChatOpenAI(
+                base_url=url,
+                api_key=key,
+                model=m,
+                temperature=temperature
+            ), m
 
     def generate_answer(
         self,
@@ -77,7 +130,7 @@ class LlmService:
         temperature_override: float | None = None,
     ) -> LLMGenerationResult:
         """
-        Invokes the LangChain ChatOpenAI model using system and user prompts from RenderedPrompt.
+        Invokes the LangChain ChatOpenAI or ChatGroq model using system and user prompts.
 
         Args:
             rendered_prompt: Standardized RenderedPrompt instance containing system_prompt & user_prompt.
@@ -95,8 +148,9 @@ class LlmService:
         )
 
         logger.info(
-            "LlmService.generate_answer: starting | model='%s' prompt_name='%s' version='%s' temp=%.2f",
-            self._model,
+            "LlmService.generate_answer: starting | provider='%s' model='%s' prompt_name='%s' version='%s' temp=%.2f",
+            self._provider,
+            self._resolved_model_name,
             rendered_prompt.prompt_name,
             rendered_prompt.version,
             eff_temperature,
@@ -109,20 +163,22 @@ class LlmService:
 
         try:
             active_model = self._chat_model
+            resolved_name = self._resolved_model_name
             if temperature_override is not None and temperature_override != self._temperature:
                 logger.debug(
                     "LlmService.generate_answer: applying temperature override=%.2f",
                     temperature_override,
                 )
-                active_model = ChatOpenAI(
-                    base_url=self._base_url,
-                    api_key=self._api_key,
+                active_model, resolved_name = self._create_model(
+                    provider=self._provider,
                     model=self._model,
                     temperature=temperature_override,
+                    api_key=self._api_key,
+                    base_url=self._base_url
                 )
 
             logger.debug(
-                "LlmService.generate_answer: invoking LangChain ChatOpenAI with %d messages",
+                "LlmService.generate_answer: invoking LangChain client with %d messages",
                 len(messages),
             )
 
@@ -139,7 +195,7 @@ class LlmService:
 
             return LLMGenerationResult(
                 answer=answer_content,
-                model_name=self._model,
+                model_name=resolved_name,
                 latency_ms=latency_ms,
                 usage=response_meta if isinstance(response_meta, dict) else None,
             )
@@ -148,7 +204,7 @@ class LlmService:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
             logger.error(
                 "LlmService.generate_answer: failed | model='%s' latency_ms=%.2f error: %s",
-                self._model,
+                self._resolved_model_name,
                 latency_ms,
                 str(e),
                 exc_info=True,
