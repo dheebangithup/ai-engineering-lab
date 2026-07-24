@@ -37,6 +37,17 @@ document.addEventListener('DOMContentLoaded', () => {
         valTemperature: document.getElementById('val-temperature'),
         btnSubmitSearch: document.getElementById('btn-submit-search'),
 
+        // Retrieval Mode Controls
+        searchRetrievalMode: document.getElementById('search-retrieval-mode'),
+        hybridWeightsPanel: document.getElementById('hybrid-weights-panel'),
+        searchDenseWeight: document.getElementById('search-dense-weight'),
+        searchBm25Weight: document.getElementById('search-bm25-weight'),
+        valDenseWeight: document.getElementById('val-dense-weight'),
+        valBm25Weight: document.getElementById('val-bm25-weight'),
+        bm25StatusIndicator: document.getElementById('bm25-status-indicator'),
+        bm25StatusText: document.getElementById('bm25-status-text'),
+        sidebarBm25Status: document.getElementById('sidebar-bm25-status'),
+
         // Prompt Provisioning Form Elements
         searchPromptName: document.getElementById('search-prompt-name'),
         searchPromptVersion: document.getElementById('search-prompt-version'),
@@ -117,7 +128,9 @@ document.addEventListener('DOMContentLoaded', () => {
         valAvgRelevance: document.getElementById('val-avg-relevance'),
         valAvgRecall: document.getElementById('val-avg-recall'),
         valAvgPrecision: document.getElementById('val-avg-precision'),
-        evalSchemaInfo: document.getElementById('eval-schema-info')
+        evalSchemaInfo: document.getElementById('eval-schema-info'),
+        evalRetrievalMode: document.getElementById('eval-retrieval-mode'),
+        evalRetrievalModeWrapper: document.getElementById('eval-retrieval-mode-wrapper')
     };
 
     // ── Helper: Toast Notifications ───────────────────────────────────
@@ -203,6 +216,95 @@ document.addEventListener('DOMContentLoaded', () => {
         DOM.cbMinScoreThreshold.addEventListener('input', (e) => DOM.valCbMinScore.textContent = parseFloat(e.target.value).toFixed(2));
     }
     DOM.searchTemperature.addEventListener('input', (e) => DOM.valTemperature.textContent = parseFloat(e.target.value).toFixed(2));
+
+    // Retrieval Mode Interactions
+    if (DOM.searchRetrievalMode) {
+        DOM.searchRetrievalMode.addEventListener('change', (e) => {
+            const isHybrid = e.target.value === 'hybrid';
+            if (DOM.hybridWeightsPanel) {
+                DOM.hybridWeightsPanel.style.display = isHybrid ? 'block' : 'none';
+            }
+            console.log(`[Retrieval Mode] Switched to: ${e.target.value}`);
+        });
+    }
+
+    if (DOM.searchDenseWeight) {
+        DOM.searchDenseWeight.addEventListener('input', (e) => {
+            const denseVal = parseFloat(e.target.value);
+            const bm25Val = Math.round((1.0 - denseVal) * 100) / 100;
+            DOM.valDenseWeight.textContent = denseVal.toFixed(2);
+            DOM.searchBm25Weight.value = bm25Val;
+            DOM.valBm25Weight.textContent = bm25Val.toFixed(2);
+        });
+    }
+
+    if (DOM.searchBm25Weight) {
+        DOM.searchBm25Weight.addEventListener('input', (e) => {
+            const bm25Val = parseFloat(e.target.value);
+            const denseVal = Math.round((1.0 - bm25Val) * 100) / 100;
+            DOM.valBm25Weight.textContent = bm25Val.toFixed(2);
+            DOM.searchDenseWeight.value = denseVal;
+            DOM.valDenseWeight.textContent = denseVal.toFixed(2);
+        });
+    }
+
+    // Fetch BM25 index status on page load
+    async function fetchBm25Status() {
+        try {
+            const response = await fetch('/api/v1/bm25/status');
+            const result = await response.json();
+            if (result.success && result.data) {
+                const { is_ready, document_count } = result.data;
+                if (DOM.bm25StatusIndicator) {
+                    DOM.bm25StatusIndicator.className = `status-indicator ${is_ready ? 'online' : 'offline'}`;
+                }
+                if (DOM.bm25StatusText) {
+                    DOM.bm25StatusText.textContent = is_ready
+                        ? `BM25 Index: Ready (${document_count} docs)`
+                        : 'BM25 Index: Not Built';
+                }
+                if (DOM.sidebarBm25Status) {
+                    DOM.sidebarBm25Status.textContent = is_ready
+                        ? `Ready (${document_count})`
+                        : 'Not Built';
+                    DOM.sidebarBm25Status.style.color = is_ready ? '#4ade80' : '#ef4444';
+                }
+            }
+        } catch (err) {
+            console.warn('[BM25 Status] Failed to fetch BM25 index status:', err.message);
+            if (DOM.bm25StatusText) {
+                DOM.bm25StatusText.textContent = 'BM25 Index: Unavailable';
+            }
+        }
+    }
+    fetchBm25Status();
+
+    // Rebuild BM25 index button handler
+    const btnRebuildBm25 = document.getElementById('btn-rebuild-bm25');
+    if (btnRebuildBm25) {
+        btnRebuildBm25.addEventListener('click', async () => {
+            btnRebuildBm25.disabled = true;
+            const originalHtml = btnRebuildBm25.innerHTML;
+            btnRebuildBm25.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Rebuilding...';
+            showToast('Rebuilding BM25 keyword index from Qdrant payloads...', 'info');
+            try {
+                const response = await fetch('/api/v1/bm25/rebuild', { method: 'POST' });
+                const result = await response.json();
+                if (result.success && result.data) {
+                    showToast(`BM25 Index rebuilt successfully! (${result.data.document_count} docs)`, 'success');
+                    await fetchBm25Status();
+                } else {
+                    throw new Error(result.message || 'Failed to rebuild BM25 index');
+                }
+            } catch (err) {
+                console.error('[BM25 Rebuild] Failed:', err);
+                showToast(`Rebuild failed: ${err.message}`, 'error');
+            } finally {
+                btnRebuildBm25.disabled = false;
+                btnRebuildBm25.innerHTML = originalHtml;
+            }
+        });
+    }
 
     // ── File Drag & Drop Handling ─────────────────────────────────────
     DOM.dropZone.addEventListener('dragover', (e) => {
@@ -471,6 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
 
         // Assemble SearchRequest Payload (ALL Parameters covered)
+        const retrievalMode = DOM.searchRetrievalMode ? DOM.searchRetrievalMode.value : 'dense';
         const payload = {
             query: queryText,
             top_k: parseInt(DOM.searchTopK.value, 10),
@@ -478,7 +581,10 @@ document.addEventListener('DOMContentLoaded', () => {
             max_context_tokens: parseInt(DOM.cbMaxTokens.value, 10),
             enable_llm_generation: DOM.searchEnableLlm.checked,
             temperature: parseFloat(DOM.searchTemperature.value),
-            prompt_name: DOM.searchPromptName.value.trim() || 'rag_qa'
+            prompt_name: DOM.searchPromptName.value.trim() || 'rag_qa',
+            retrieval_mode: retrievalMode,
+            dense_weight: DOM.searchDenseWeight ? parseFloat(DOM.searchDenseWeight.value) : 0.7,
+            bm25_weight: DOM.searchBm25Weight ? parseFloat(DOM.searchBm25Weight.value) : 0.3
         };
 
         if (DOM.searchPromptVersion.value.trim()) {
@@ -676,8 +782,28 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>`;
             }
 
+            const retrievalModeBadge = stats.retrieval_mode 
+                ? `<span>Mode: <strong style="color: ${stats.retrieval_mode === 'hybrid' ? '#a78bfa' : (stats.retrieval_mode === 'bm25' ? '#fbbf24' : '#60a5fa')}">${stats.retrieval_mode.toUpperCase()}</strong></span>` 
+                : '';
+            
+            // Generate extra retrieval metrics for hybrid search
+            let hybridStatsHtml = '';
+            if (stats.retrieval_mode === 'hybrid') {
+                hybridStatsHtml = `
+                    <span>Dense Candidates: <strong>${stats.dense_count !== undefined ? stats.dense_count : 'N/A'}</strong></span>
+                    <span>BM25 Candidates: <strong>${stats.bm25_count !== undefined ? stats.bm25_count : 'N/A'}</strong></span>
+                    <span>Fused Candidates: <strong>${stats.fused_count !== undefined ? stats.fused_count : 'N/A'}</strong></span>
+                `;
+            } else if (stats.retrieval_mode === 'bm25') {
+                hybridStatsHtml = `
+                    <span>BM25 Candidates: <strong>${stats.input_count || 0}</strong></span>
+                `;
+            }
+
             const statsBar = `
                 <div style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-dim); background: rgba(255,255,255,0.03); padding: 0.5rem 0.75rem; border-radius: 4px; margin-bottom: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
+                    ${retrievalModeBadge}
+                    ${hybridStatsHtml}
                     <span>Input: <strong>${stats.input_count || 0}</strong></span>
                     <span>Dropped: <strong style="color: ${stats.below_threshold_dropped ? '#ef4444' : 'inherit'}">${stats.below_threshold_dropped || 0}</strong></span>
                     <span>After Dedup: <strong>${stats.after_dedup || 0}</strong></span>
@@ -763,6 +889,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function initEvalForm() {
         if (!DOM.evalDatasetEditor.value) {
             updateEvalJsonTemplate();
+        } else {
+            // Keep visibility in sync even if editor already has value
+            const type = DOM.evalType.value;
+            if (DOM.evalRetrievalModeWrapper) {
+                DOM.evalRetrievalModeWrapper.style.display = (type === 'pipeline') ? 'block' : 'none';
+            }
         }
     }
 
@@ -772,6 +904,7 @@ document.addEventListener('DOMContentLoaded', () => {
         DOM.evalDatasetEditor.value = JSON.stringify(defaultData, null, 4);
         
         if (type === 'pipeline') {
+            if (DOM.evalRetrievalModeWrapper) DOM.evalRetrievalModeWrapper.style.display = 'block';
             DOM.evalSchemaInfo.style.background = 'rgba(59, 130, 246, 0.08)';
             DOM.evalSchemaInfo.style.borderLeft = '3px solid var(--primary)';
             DOM.evalSchemaInfo.style.color = '#93c5fd';
@@ -783,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <li><code>ground_truth</code> (Required): Baseline reference answer.</li>
                 </ul>`;
         } else {
+            if (DOM.evalRetrievalModeWrapper) DOM.evalRetrievalModeWrapper.style.display = 'none';
             DOM.evalSchemaInfo.style.background = 'rgba(16, 185, 129, 0.08)';
             DOM.evalSchemaInfo.style.borderLeft = '3px solid var(--success)';
             DOM.evalSchemaInfo.style.color = '#a7f3d0';
@@ -844,6 +978,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isPipeline) {
             payload.test_questions = datasetParsed;
+            payload.retrieval_mode = DOM.evalRetrievalMode ? DOM.evalRetrievalMode.value : 'dense';
+            payload.dense_weight = DOM.searchDenseWeight ? parseFloat(DOM.searchDenseWeight.value) : 0.7;
+            payload.bm25_weight = DOM.searchBm25Weight ? parseFloat(DOM.searchBm25Weight.value) : 0.3;
         } else {
             payload.test_set = datasetParsed;
         }

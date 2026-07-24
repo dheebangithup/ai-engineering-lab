@@ -231,4 +231,59 @@ class QdrantStore(VectorStore):
             except Exception as ie:
                 app_logger.warning(f"QdrantStore: Notice while creating payload index for field '{field_name}': {ie}")
 
+    @override
+    def scroll_all_payloads(self, batch_size: int = 100) -> list[dict]:
+        """
+        Scrolls through all points in the Qdrant collection and returns their payloads.
+        Uses Qdrant scroll API with with_vectors=False for efficiency.
+        Used by BM25RetrieverService to build the keyword search index from stored chunk content.
+        """
+        try:
+            app_logger.info(
+                f"QdrantStore: Starting scroll_all_payloads for collection '{app_settings.COLLECTION_NAME}' "
+                f"with batch_size={batch_size}"
+            )
+            all_payloads = []
+            offset = None
+            batch_count = 0
 
+            while True:
+                points, next_offset = self.__client.scroll(
+                    collection_name=app_settings.COLLECTION_NAME,
+                    limit=batch_size,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                if not points:
+                    app_logger.debug("QdrantStore: scroll_all_payloads received empty batch. Scroll complete.")
+                    break
+
+                batch_count += 1
+                for point in points:
+                    if point.payload:
+                        all_payloads.append(point.payload)
+
+                app_logger.debug(
+                    f"QdrantStore: scroll_all_payloads batch {batch_count} fetched {len(points)} points "
+                    f"(total payloads so far: {len(all_payloads)})"
+                )
+
+                if next_offset is None:
+                    break
+                offset = next_offset
+
+            app_logger.info(
+                f"QdrantStore: scroll_all_payloads completed. Retrieved {len(all_payloads)} payloads "
+                f"across {batch_count} batches from collection '{app_settings.COLLECTION_NAME}'."
+            )
+            return all_payloads
+
+        except Exception as e:
+            app_logger.error(
+                f"QdrantStore: Error during scroll_all_payloads for collection "
+                f"'{app_settings.COLLECTION_NAME}': {str(e)}",
+                exc_info=True,
+            )
+            raise e

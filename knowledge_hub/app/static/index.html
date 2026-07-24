@@ -69,6 +69,10 @@
                         <span class="metric-label">LLM Engine</span>
                         <span class="metric-val" id="llm-status-text">LM Studio</span>
                     </div>
+                    <div class="metric">
+                        <span class="metric-label">BM25 Index</span>
+                        <span class="metric-val" id="sidebar-bm25-status">Not Built</span>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -147,6 +151,54 @@
                                     </label>
                                     <input type="range" id="search-temperature" min="0.0" max="2.0" step="0.05"
                                         value="0.70" class="slider">
+                                </div>
+                            </div>
+
+                            <!-- Retrieval Mode Selection -->
+                            <div class="accordion-item">
+                                <button type="button" class="accordion-header" data-toggle="acc-retrieval-mode">
+                                    <span><i class="fa-solid fa-route"></i> Retrieval Pipeline Mode</span>
+                                    <i class="fa-solid fa-chevron-down acc-icon"></i>
+                                </button>
+                                <div id="acc-retrieval-mode" class="accordion-content">
+                                    <div class="form-group">
+                                        <label for="search-retrieval-mode">Retrieval Strategy</label>
+                                        <select id="search-retrieval-mode">
+                                            <option value="dense" selected>Dense (Vector Similarity Only)</option>
+                                            <option value="bm25">BM25 (Keyword Search Only)</option>
+                                            <option value="hybrid">Hybrid (Dense + BM25 RRF Fusion)</option>
+                                        </select>
+                                    </div>
+
+                                    <div id="hybrid-weights-panel" class="hybrid-weights-panel" style="display: none;">
+                                        <div class="form-row">
+                                            <div class="form-group col-6">
+                                                <label for="search-dense-weight">
+                                                    Dense Weight: <span id="val-dense-weight" class="param-val">0.70</span>
+                                                </label>
+                                                <input type="range" id="search-dense-weight" min="0.0" max="1.0" step="0.05"
+                                                    value="0.70" class="slider">
+                                            </div>
+                                            <div class="form-group col-6">
+                                                <label for="search-bm25-weight">
+                                                    BM25 Weight: <span id="val-bm25-weight" class="param-val">0.30</span>
+                                                </label>
+                                                <input type="range" id="search-bm25-weight" min="0.0" max="1.0" step="0.05"
+                                                    value="0.30" class="slider">
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <!-- Always visible BM25 index status and trigger rebuild -->
+                                    <div class="bm25-index-status" style="margin-top: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <span class="status-indicator" id="bm25-status-indicator"></span>
+                                            <span id="bm25-status-text">BM25 Index: Checking...</span>
+                                        </div>
+                                        <button type="button" class="btn btn-secondary btn-xs" id="btn-rebuild-bm25">
+                                            <i class="fa-solid fa-arrows-rotate"></i> Rebuild Index
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
 
@@ -549,6 +601,15 @@
                                 <select id="eval-type">
                                     <option value="pipeline" selected>Dynamic RAG Pipeline (Live Retrieval & LLM)</option>
                                     <option value="static">Static Dataset Logs (Pre-computed Context/Answer)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group" id="eval-retrieval-mode-wrapper">
+                                <label for="eval-retrieval-mode">Evaluate Retrieval Strategy</label>
+                                <select id="eval-retrieval-mode">
+                                    <option value="dense" selected>Dense (Vector Similarity Only)</option>
+                                    <option value="bm25">BM25 (Keyword Search Only)</option>
+                                    <option value="hybrid">Hybrid (Dense + BM25 RRF Fusion)</option>
                                 </select>
                             </div>
 

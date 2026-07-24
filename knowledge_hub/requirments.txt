@@ -36,3 +36,7 @@ ragas==0.1.9
 
 # Docker SDK (if you plan to manage containers programmatically)
 docker==7.1.0
+
+# BM25 Hybrid Retrieval
+langchain-community
+rank-bm25

@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic.dataclasses import dataclass
 
 from knowledge_hub.app.model import Document
@@ -13,3 +14,4 @@ class SearchResult:
 @dataclass
 class SearchResponse:
     results: list[SearchResult]
+    metadata: Optional[dict] = None

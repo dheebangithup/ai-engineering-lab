@@ -17,7 +17,7 @@ from knowledge_hub.app.database.qdrant_store import QdrantStore
 from knowledge_hub.app.embeddings import LocalLMStudioEmbeddingProvider
 from knowledge_hub.app.enums import FileType
 from knowledge_hub.app.repositories import DocumentMetaDataRepository, ChunkMetaDataRepository
-from knowledge_hub.app.service import IngestionService, DocumentMetaDataService, RetrievalService, LlmService
+from knowledge_hub.app.service import IngestionService, DocumentMetaDataService, RetrievalService, LlmService, BM25RetrieverService
 from knowledge_hub.app.service.retrieval_service import RetrievalResult
 from knowledge_hub.app.model import SearchRequest, SearchResponse
 from knowledge_hub.app.model.api_reponse import ApiResponse, ResponseBuilder
@@ -29,6 +29,18 @@ logging.basicConfig(
 )
 
 # Initialize database tables via lifespan event
+# Global BM25 service singleton (shared across requests)
+_bm25_service_singleton: BM25RetrieverService | None = None
+
+
+def _get_bm25_singleton() -> BM25RetrieverService:
+    """Get or create the global BM25RetrieverService singleton."""
+    global _bm25_service_singleton
+    if _bm25_service_singleton is None:
+        _bm25_service_singleton = BM25RetrieverService()
+    return _bm25_service_singleton
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     startup_logger = logging.getLogger("app")
@@ -43,6 +55,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         startup_logger.error("Failed to check/create database tables during startup", exc_info=True)
         raise e
+
+    # Build BM25 index from existing Qdrant collection on startup
+    from knowledge_hub.app.config import app_settings
+    if app_settings.ENABLE_BM25_INDEX_ON_STARTUP:
+        try:
+            startup_logger.info("Building BM25 index from Qdrant collection on startup...")
+            bm25_service = _get_bm25_singleton()
+            embedding_provider = LocalLMStudioEmbeddingProvider()
+            vector_store = QdrantStore(embedding_provider=embedding_provider)
+            payloads = vector_store.scroll_all_payloads(batch_size=200)
+            stats = bm25_service.build_index_from_payloads(payloads)
+            startup_logger.info(
+                f"BM25 index built on startup | doc_count={stats.document_count} "
+                f"build_time_ms={stats.build_time_ms:.2f} is_ready={stats.is_ready}"
+            )
+        except Exception as bm25_err:
+            startup_logger.error(
+                f"Failed to build BM25 index on startup: {str(bm25_err)}",
+                exc_info=True,
+            )
+            startup_logger.warning("BM25 index will not be available until manual rebuild or next ingestion.")
+
     yield
     startup_logger.info("Application shutting down. Cleaning up resources...")
 
@@ -142,6 +176,7 @@ def get_retrieval_service(
         document_metadata_service=metadata_service,
         vector_store=vector_store,
         llm_service=llm_service,
+        bm25_service=_get_bm25_singleton(),
     )
 
 # Routes
@@ -315,7 +350,8 @@ async def ingest_document(
             processor=processor,
             embedding_provider=embedding_provider,
             vector_store=vector_store,
-            meta_data_service=metadata_service
+            meta_data_service=metadata_service,
+            bm25_service=_get_bm25_singleton(),
         )
 
         app_logger.info(f"Running Ingestion pipeline for: '{temp_file_path}' (doc_version: {doc_version}, doc_id: {doc_id})")
@@ -387,6 +423,57 @@ async def search_documents(
             error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+@app.post(
+    "/api/v1/bm25/rebuild",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    tags=["BM25"],
+    summary="Rebuild BM25 keyword search index",
+    description="Manually triggers a full rebuild of the in-memory BM25 index from all Qdrant vector store payloads."
+)
+async def rebuild_bm25_index(
+    vector_store: QdrantStore = Depends(get_vector_store),
+):
+    app_logger.info("API Endpoint: POST /api/v1/bm25/rebuild requested")
+    try:
+        bm25_service = _get_bm25_singleton()
+        payloads = vector_store.scroll_all_payloads(batch_size=200)
+        stats = bm25_service.build_index_from_payloads(payloads)
+        result = {
+            "document_count": stats.document_count,
+            "build_time_ms": stats.build_time_ms,
+            "is_ready": stats.is_ready,
+        }
+        app_logger.info(f"BM25 index rebuilt successfully: {result}")
+        return ResponseBuilder.success(data=result, message="BM25 index rebuilt successfully")
+    except Exception as e:
+        app_logger.error("Failed to rebuild BM25 index", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to rebuild BM25 index: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.get(
+    "/api/v1/bm25/status",
+    response_model=ApiResponse[dict],
+    status_code=status.HTTP_200_OK,
+    tags=["BM25"],
+    summary="Get BM25 index status",
+    description="Returns the current status and statistics of the in-memory BM25 keyword search index."
+)
+async def get_bm25_status():
+    app_logger.info("API Endpoint: GET /api/v1/bm25/status requested")
+    bm25_service = _get_bm25_singleton()
+    stats = bm25_service.index_stats
+    result = {
+        "is_ready": stats.is_ready,
+        "document_count": stats.document_count,
+        "build_time_ms": stats.build_time_ms,
+        "last_build_timestamp": stats.last_build_timestamp,
+    }
+    app_logger.info(f"BM25 index status: {result}")
+    return ResponseBuilder.success(data=result, message="BM25 index status retrieved")
+
 # --- Evaluation Request Schemas ---
 class EvalQueryItem(BaseModel):
     question: str = Field(..., description="The query sent to the RAG system")
@@ -405,6 +492,9 @@ class DynamicEvalQueryItem(BaseModel):
 class DynamicEvaluationPayload(BaseModel):
     run_name: Optional[str] = Field(None, description="Descriptive label for this evaluation run")
     test_questions: List[DynamicEvalQueryItem] = Field(..., description="List of queries and ground truths to run through RAG and evaluate")
+    retrieval_mode: Optional[str] = Field(None, description="Retrieval mode: 'dense' | 'bm25' | 'hybrid'. Defaults to default retrieval mode.")
+    bm25_weight: Optional[float] = Field(None, description="BM25 weight for hybrid search.")
+    dense_weight: Optional[float] = Field(None, description="Dense weight for hybrid search.")
 
 
 # --- Evaluation Endpoints ---
@@ -449,14 +539,20 @@ async def evaluate_rag_pipeline(
     retrieval_service = Depends(get_retrieval_service)
 ):
     from knowledge_hub.app.service.evaluation_service import EvaluationService
-    app_logger.info(f"API Endpoint: POST /api/v1/evaluate/pipeline called with {len(payload.test_questions)} questions.")
+    app_logger.info(
+        f"API Endpoint: POST /api/v1/evaluate/pipeline called with {len(payload.test_questions)} questions "
+        f"(mode={payload.retrieval_mode})."
+    )
     try:
         service = EvaluationService(db)
         test_questions_dicts = [item.dict() for item in payload.test_questions]
         results = service.run_dynamic_pipeline_evaluation(
             retrieval_service=retrieval_service,
             test_questions=test_questions_dicts,
-            run_name=payload.run_name
+            run_name=payload.run_name,
+            retrieval_mode=payload.retrieval_mode,
+            bm25_weight=payload.bm25_weight,
+            dense_weight=payload.dense_weight,
         )
         app_logger.info(f"Pipeline evaluation completed successfully. Run ID: {results.get('run_id')}")
         return ResponseBuilder.success(data=results, message="Pipeline evaluation completed successfully.")

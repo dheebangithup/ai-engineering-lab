@@ -274,7 +274,10 @@ class EvaluationService:
         self,
         retrieval_service: Any,
         test_questions: List[Dict[str, str]],
-        run_name: str = None
+        run_name: str = None,
+        retrieval_mode: str = None,
+        bm25_weight: float = None,
+        dense_weight: float = None,
     ) -> Dict[str, Any]:
         """
         Runs the actual RAG pipeline for each query dynamically using RetrievalService,
@@ -290,7 +293,10 @@ class EvaluationService:
             logger.error("Validation Error: RetrievalService instance is None")
             raise ValueError("RetrievalService must be provided for dynamic evaluation.")
 
-        logger.info(f"Starting dynamic RAG pipeline evaluation for {len(test_questions)} questions...")
+        logger.info(
+            f"Starting dynamic RAG pipeline evaluation for {len(test_questions)} questions "
+            f"(mode={retrieval_mode} weights={dense_weight}/{bm25_weight})..."
+        )
 
         test_set = []
         for i, item in enumerate(test_questions):
@@ -304,11 +310,19 @@ class EvaluationService:
             # Trigger actual RetrievalService search and LLM generation
             logger.info(f"Dynamic Retrieval [{i+1}/{len(test_questions)}]: Querying RAG pipeline for '{question}'")
             try:
-                search_request = SearchRequest(
-                    query=question,
-                    enable_llm_generation=True,
-                    prompt_name="rag_qa"  # Default prompt name
-                )
+                search_args = {
+                    "query": question,
+                    "enable_llm_generation": True,
+                    "prompt_name": "rag_qa"
+                }
+                if retrieval_mode:
+                    search_args["retrieval_mode"] = retrieval_mode
+                if bm25_weight is not None:
+                    search_args["bm25_weight"] = bm25_weight
+                if dense_weight is not None:
+                    search_args["dense_weight"] = dense_weight
+
+                search_request = SearchRequest(**search_args)
                 response = retrieval_service.search(search_request)
                 
                 if not response or not response.success or not response.data:

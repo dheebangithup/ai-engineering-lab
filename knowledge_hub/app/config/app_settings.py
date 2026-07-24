@@ -44,5 +44,12 @@ class AppSettings(BaseSettings):
         "file_name": "keyword",
     }
 
+    # BM25 Hybrid Retrieval Settings
+    DEFAULT_RETRIEVAL_MODE: str = 'dense'      # "dense" | "bm25" | "hybrid"
+    DEFAULT_BM25_WEIGHT: float = 0.3           # BM25 weight in hybrid RRF fusion
+    DEFAULT_DENSE_WEIGHT: float = 0.7          # Dense vector weight in hybrid RRF fusion
+    BM25_TOP_K_MULTIPLIER: float = 1.5         # Fetch top_k * multiplier candidates for better fusion
+    ENABLE_BM25_INDEX_ON_STARTUP: bool = True  # Build BM25 index from Qdrant on app startup
+
     model_config = SettingsConfigDict(env_file=BASE_DIR / ".env")
 

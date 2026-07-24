@@ -36,11 +36,13 @@ class IngestionService:
             embedding_provider: EmbeddingProvider,
             vector_store: VectorStore,
             meta_data_service: DocumentMetaDataService,
+            bm25_service=None,
     ):
         self.processor = processor
         self.embedding_provider = embedding_provider
         self.vector_store = vector_store
         self.meta_data_service = meta_data_service
+        self.bm25_service = bm25_service
 
     def ingest(self, file_path: str, file_type: FileType, doc_version: str, doc_id: str = None):
         doc_meta = None
@@ -137,6 +139,24 @@ class IngestionService:
                 app_logger.info("IngestionService: Upserting embedded chunks into vector store.")
                 self.vector_store.upsert(embedded_chunks)
                 app_logger.info("IngestionService: Vector store upsert completed successfully.")
+
+                # Refresh BM25 index after Qdrant upsert to keep keyword search in sync
+                if self.bm25_service is not None:
+                    try:
+                        app_logger.info("IngestionService: Refreshing BM25 index after vector store upsert.")
+                        all_payloads = self.vector_store.scroll_all_payloads(batch_size=200)
+                        bm25_stats = self.bm25_service.build_index_from_payloads(all_payloads)
+                        app_logger.info(
+                            f"IngestionService: BM25 index refreshed successfully | "
+                            f"doc_count={bm25_stats.document_count} build_time_ms={bm25_stats.build_time_ms:.2f}"
+                        )
+                    except Exception as bm25_err:
+                        app_logger.error(
+                            f"IngestionService: Failed to refresh BM25 index after ingestion: {str(bm25_err)}",
+                            exc_info=True,
+                        )
+                        # Non-fatal: BM25 index refresh failure should not block ingestion pipeline
+                        app_logger.warning("IngestionService: Ingestion will continue despite BM25 index refresh failure.")
             else:
                 app_logger.info("IngestionService: No chunks require embedding or vector store upsert (identical content).")
             

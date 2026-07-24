@@ -7,6 +7,7 @@ from typing import Optional, Any
 from pydantic import BaseModel, Field
 from knowledge_hub.app.config import app_settings
 from knowledge_hub.app.prompts.context_builder import ContextBuilderConfig
+from knowledge_hub.app.enums.retrieval_mode import RetrievalMode
 
 
 class SearchRequest(BaseModel):
@@ -35,6 +36,24 @@ class SearchRequest(BaseModel):
     filters: Optional[dict[str, Any]] = Field(
         None,
         description="Optional metadata key-value filters for document filtering."
+    )
+
+    # Retrieval Pipeline Mode
+    retrieval_mode: str = Field(
+        default_factory=lambda: app_settings.DEFAULT_RETRIEVAL_MODE,
+        description="Retrieval pipeline mode: 'dense' (vector only), 'bm25' (keyword only), or 'hybrid' (dense + BM25 RRF fusion)."
+    )
+    bm25_weight: float = Field(
+        default_factory=lambda: app_settings.DEFAULT_BM25_WEIGHT,
+        description="Weight for BM25 results in hybrid RRF fusion (0.0 to 1.0).",
+        ge=0.0,
+        le=1.0
+    )
+    dense_weight: float = Field(
+        default_factory=lambda: app_settings.DEFAULT_DENSE_WEIGHT,
+        description="Weight for dense vector results in hybrid RRF fusion (0.0 to 1.0).",
+        ge=0.0,
+        le=1.0
     )
 
     # Directly reuse ContextBuilderConfig for API configuration overrides

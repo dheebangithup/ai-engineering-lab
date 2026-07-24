@@ -61,4 +61,12 @@ class VectorStore(ABC):
         """
         Bulk-update metadata payload for all vectors of a document.
         """
+        pass
+
+    @abstractmethod
+    def scroll_all_payloads(self, batch_size: int = 100) -> list[dict]:
+        """
+        Scroll through all points in the collection and return their payloads.
+        Used by BM25RetrieverService to build the keyword search index.
+        """
         pass
