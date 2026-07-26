@@ -49,6 +49,10 @@
                     <i class="fa-solid fa-square-poll-vertical"></i>
                     <span>Evaluation Center</span>
                 </button>
+                <button class="nav-item" data-tab="tab-observability">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>Observability Dashboard</span>
+                </button>
                 <button class="nav-item" data-tab="tab-api-docs">
                     <i class="fa-solid fa-code"></i>
                     <span>API Reference</span>
@@ -739,7 +743,165 @@
                 </div>
             </section>
 
-            <!-- Tab 5: API Reference -->
+            <!-- Tab 5: Observability Dashboard -->
+            <section id="tab-observability" class="tab-pane">
+                <div class="space-between mb-3">
+                    <h3><i class="fa-solid fa-chart-line"></i> Production Observability & Performance</h3>
+                    <button class="btn btn-secondary btn-sm" id="btn-refresh-observability">
+                        <i class="fa-solid fa-rotate"></i> Refresh Metrics
+                    </button>
+                </div>
+
+                <!-- Aggregated Score/Metric Cards -->
+                <div class="grid-layout cols-4 mb-4">
+                    <div class="card metric-card">
+                        <div class="card-body text-center">
+                            <span class="metric-label">Total RAG Queries</span>
+                            <h2 class="metric-value mt-1" id="obs-total-queries">0</h2>
+                            <span class="text-sm text-muted" id="obs-query-success-rate">Success Rate: 100%</span>
+                        </div>
+                    </div>
+                    <div class="card metric-card">
+                        <div class="card-body text-center">
+                            <span class="metric-label">Cumulative Cost (USD)</span>
+                            <h2 class="metric-value mt-1" id="obs-total-cost">$0.000000</h2>
+                            <span class="text-sm text-muted" id="obs-cost-per-query">Avg: $0.000 / q</span>
+                        </div>
+                    </div>
+                    <div class="card metric-card">
+                        <div class="card-body text-center">
+                            <span class="metric-label">Total Tokens Consumed</span>
+                            <h2 class="metric-value mt-1" id="obs-total-tokens">0</h2>
+                            <span class="text-sm text-muted" id="obs-token-split">Prompt: 0 | Comp: 0</span>
+                        </div>
+                    </div>
+                    <div class="card metric-card">
+                        <div class="card-body text-center">
+                            <span class="metric-label">Avg Query Latency</span>
+                            <h2 class="metric-value mt-1" id="obs-avg-latency">0 ms</h2>
+                            <span class="text-sm text-muted" id="obs-latency-split">LLM: 0ms | Embed: 0ms</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid-layout cols-2 mb-4">
+                    <!-- Ingestion Pipeline Profile -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h4><i class="fa-solid fa-hourglass-half"></i> Ingestion Stage Duration Breakdown</h4>
+                        </div>
+                        <div class="card-body">
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">Avg Ingestion Parsing (OCR/Unstructured):</span>
+                                <span class="metric-val" id="obs-avg-parsing">0 ms</span>
+                            </div>
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">Avg Invalidation & Chunking Strategy:</span>
+                                <span class="metric-val" id="obs-avg-chunking">0 ms</span>
+                            </div>
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">Avg Vector Embedding Generation:</span>
+                                <span class="metric-val" id="obs-avg-embedding">0 ms</span>
+                            </div>
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">Avg Vector Indexing (Qdrant & BM25):</span>
+                                <span class="metric-val" id="obs-avg-vector">0 ms</span>
+                            </div>
+                            <div style="border-top: 1px solid rgba(255,255,255,0.1); margin-top: 1rem; padding-top: 0.5rem;" class="metrics-row">
+                                <strong>Total Avg Pipeline Time:</strong>
+                                <strong id="obs-avg-ingest-total">0 ms</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Retrieval Mode Metrics -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h4><i class="fa-solid fa-route"></i> Retrieval Strategy Traffic Share</h4>
+                        </div>
+                        <div class="card-body">
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">Dense Vector Retrieval:</span>
+                                <span class="metric-val" id="obs-count-dense">0 queries</span>
+                            </div>
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">BM25 Sparse Keyword Search:</span>
+                                <span class="metric-val" id="obs-count-bm25">0 queries</span>
+                            </div>
+                            <div class="metrics-row mb-2">
+                                <span class="metric-label">Hybrid Fusion RRF:</span>
+                                <span class="metric-val" id="obs-count-hybrid">0 queries</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Telemetry Logs -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h4><i class="fa-solid fa-list-check"></i> Recent Search Telemetry Logs</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="data-table" id="obs-queries-table">
+                                <thead>
+                                    <tr>
+                                        <th>Query Text</th>
+                                        <th>Mode</th>
+                                        <th>Model / Provider</th>
+                                        <th>Tokens</th>
+                                        <th>Cost</th>
+                                        <th>Latencies</th>
+                                        <th>Status</th>
+                                        <th>Timestamp</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="obs-queries-table-body">
+                                    <tr>
+                                        <td colspan="8" class="text-center py-4 text-muted">
+                                            No query telemetry captured yet.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Ingestion Logs -->
+                <div class="card">
+                    <div class="card-header">
+                        <h4><i class="fa-solid fa-cloud-arrow-up"></i> Recent Document Ingestion Logs</h4>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="data-table" id="obs-ingestions-table">
+                                <thead>
+                                    <tr>
+                                        <th>File Name</th>
+                                        <th>Type</th>
+                                        <th>Size</th>
+                                        <th>Chunks</th>
+                                        <th>Parsing / Chunking / Embed / Index</th>
+                                        <th>Total Time</th>
+                                        <th>Status</th>
+                                        <th>Timestamp</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="obs-ingestions-table-body">
+                                    <tr>
+                                        <td colspan="8" class="text-center py-4 text-muted">
+                                            No ingestion logs recorded yet.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Tab 6: API Reference -->
             <section id="tab-api-docs" class="tab-pane">
                 <div class="card">
                     <div class="card-header space-between">

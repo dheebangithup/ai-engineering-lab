@@ -172,6 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
             'tab-documents': { title: 'Uploaded Document Registry', sub: 'Inspect stored PostgreSQL document metadata entities and page statistics' },
             'tab-ingest': { title: 'Document Ingestion Studio', sub: 'Parse, chunk, embed, and index enterprise documents into vector store' },
             'tab-evaluation': { title: 'RAG Evaluation Center', sub: 'Run RAGAS benchmarks and review regression reports' },
+            'tab-observability': { title: 'Production Observability & Metrics Dashboard', sub: 'Monitor production costs, token usage, latencies, and ingestion runs in real-time' },
             'tab-api-docs': { title: 'API Endpoint Specifications', sub: 'RESTful API documentation and schema endpoints' }
         };
 
@@ -185,6 +186,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (tabId === 'tab-evaluation') {
             fetchEvaluationHistory();
             initEvalForm();
+        } else if (tabId === 'tab-observability') {
+            fetchObservabilityStats();
         }
     }
 
@@ -1268,12 +1271,181 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchEvaluationHistory();
     });
 
+    // ── Observability & Telemetry Dash Logic ─────────────────────────
+    async function fetchObservabilityStats() {
+        console.log('[API Call] Fetching observability statistics and logs...');
+        
+        const qTotal = document.getElementById('obs-total-queries');
+        const qRate = document.getElementById('obs-query-success-rate');
+        const cTotal = document.getElementById('obs-total-cost');
+        const cAvg = document.getElementById('obs-cost-per-query');
+        const tTotal = document.getElementById('obs-total-tokens');
+        const tSplit = document.getElementById('obs-token-split');
+        const lAvg = document.getElementById('obs-avg-latency');
+        const lSplit = document.getElementById('obs-latency-split');
+        
+        const pAvg = document.getElementById('obs-avg-parsing');
+        const chAvg = document.getElementById('obs-avg-chunking');
+        const eAvg = document.getElementById('obs-avg-embedding');
+        const vAvg = document.getElementById('obs-avg-vector');
+        const iTotal = document.getElementById('obs-avg-ingest-total');
+        
+        const dCount = document.getElementById('obs-count-dense');
+        const bCount = document.getElementById('obs-count-bm25');
+        const hCount = document.getElementById('obs-count-hybrid');
+
+        try {
+            // 1. Fetch Aggregated Metrics Stats
+            const statsRes = await fetch('/api/v1/observability/stats');
+            const statsResult = await statsRes.json();
+            if (statsResult.success && statsResult.data) {
+                const s = statsResult.data;
+                
+                if (qTotal) qTotal.textContent = s.queries.total;
+                if (qRate) qRate.textContent = `Success Rate: ${s.queries.success_rate}% (${s.queries.success} / ${s.queries.total})`;
+                
+                if (cTotal) cTotal.textContent = `$${s.tokens.cost_usd.toFixed(6)}`;
+                const avgCost = s.queries.total > 0 ? (s.tokens.cost_usd / s.queries.total) : 0;
+                if (cAvg) cAvg.textContent = `Avg: $${avgCost.toFixed(4)} / q`;
+                
+                if (tTotal) tTotal.textContent = s.tokens.total.toLocaleString();
+                if (tSplit) tSplit.textContent = `Prompt: ${s.tokens.prompt.toLocaleString()} | Comp: ${s.tokens.completion.toLocaleString()}`;
+                
+                if (lAvg) lAvg.textContent = `${s.queries.avg_total_latency_ms} ms`;
+                if (lSplit) lSplit.textContent = `LLM: ${s.queries.avg_llm_latency_ms}ms | Embed: ${s.queries.avg_embedding_latency_ms}ms`;
+                
+                if (pAvg) pAvg.textContent = `${s.ingestions.avg_parsing_ms} ms`;
+                if (chAvg) chAvg.textContent = `${s.ingestions.avg_chunking_ms} ms`;
+                if (eAvg) eAvg.textContent = `${s.ingestions.avg_embedding_ms} ms`;
+                if (vAvg) vAvg.textContent = `${s.ingestions.avg_vector_indexing_ms} ms`;
+                if (iTotal) iTotal.textContent = `${s.ingestions.avg_total_ms} ms`;
+                
+                if (dCount) dCount.textContent = `${s.retrieval_modes.dense || 0} queries`;
+                if (bCount) bCount.textContent = `${s.retrieval_modes.bm25 || 0} queries`;
+                if (hCount) hCount.textContent = `${s.retrieval_modes.hybrid || 0} queries`;
+            }
+        } catch (err) {
+            console.error('[Observability] Failed to fetch metrics stats:', err);
+            showToast('Failed to load telemetry stats card.', 'error');
+        }
+
+        // 2. Fetch Query Logs
+        try {
+            const queriesRes = await fetch('/api/v1/observability/queries?limit=25');
+            const queriesResult = await queriesRes.json();
+            const queriesTableBody = document.getElementById('obs-queries-table-body');
+            
+            if (queriesResult.success && Array.isArray(queriesResult.data) && queriesTableBody) {
+                const logs = queriesResult.data;
+                if (logs.length === 0) {
+                    queriesTableBody.innerHTML = `
+                        <tr>
+                            <td colspan="8" class="text-center py-4 text-muted">
+                                No query telemetry logs captured yet.
+                            </td>
+                        </tr>`;
+                } else {
+                    queriesTableBody.innerHTML = logs.map(log => {
+                        const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-danger';
+                        const created = log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A';
+                        const displayQuery = log.query.length > 60 ? escapeHtml(log.query.substring(0, 60)) + '...' : escapeHtml(log.query);
+                        return `
+                            <tr>
+                                <td title="${escapeHtml(log.query)}">${displayQuery}</td>
+                                <td><span class="badge badge-outline">${log.retrieval_mode.toUpperCase()}</span></td>
+                                <td>
+                                    <span style="font-size: 0.8rem; color: #fff;">${escapeHtml(log.llm_model || 'N/A')}</span>
+                                    <div style="font-size: 0.7rem; color: var(--text-dim);">${escapeHtml(log.llm_provider || 'N/A')}</div>
+                                </td>
+                                <td style="font-size: 0.8rem;">
+                                    <strong>${log.total_tokens}</strong>
+                                    <div style="font-size: 0.7rem; color: var(--text-dim);">P: ${log.prompt_tokens} | C: ${log.completion_tokens}</div>
+                                </td>
+                                <td style="font-family: var(--font-mono); font-size: 0.8rem;">$${log.cost.toFixed(6)}</td>
+                                <td style="font-size: 0.8rem;">
+                                    Total: <strong>${log.total_latency_ms.toFixed(0)}ms</strong>
+                                    <div style="font-size: 0.7rem; color: var(--text-dim);">LLM: ${log.llm_latency_ms.toFixed(0)}ms | Emb: ${log.embedding_latency_ms.toFixed(0)}ms</div>
+                                </td>
+                                <td>
+                                    <span class="badge ${statusClass}">${escapeHtml(log.status)}</span>
+                                    ${log.error_message ? `<div style="font-size: 0.7rem; color: var(--danger); margin-top: 0.2rem;" title="${escapeHtml(log.error_message)}">Err: ${escapeHtml(log.error_message.substring(0, 20))}</div>` : ''}
+                                </td>
+                                <td style="font-size: 0.8rem; color: var(--text-muted);">${created}</td>
+                            </tr>`;
+                    }).join('');
+                }
+            }
+        } catch (err) {
+            console.error('[Observability] Failed to load queries table:', err);
+        }
+
+        // 3. Fetch Ingestion Logs
+        try {
+            const ingestionsRes = await fetch('/api/v1/observability/ingestions?limit=25');
+            const ingestionsResult = await ingestionsRes.json();
+            const ingestionsTableBody = document.getElementById('obs-ingestions-table-body');
+            
+            if (ingestionsResult.success && Array.isArray(ingestionsResult.data) && ingestionsTableBody) {
+                const logs = ingestionsResult.data;
+                if (logs.length === 0) {
+                    ingestionsTableBody.innerHTML = `
+                        <tr>
+                            <td colspan="8" class="text-center py-4 text-muted">
+                                No document ingestion logs captured yet.
+                            </td>
+                        </tr>`;
+                } else {
+                    ingestionsTableBody.innerHTML = logs.map(log => {
+                        const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-danger';
+                        const created = log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A';
+                        const sizeKB = log.file_size ? `${(log.file_size / 1024).toFixed(1)} KB` : 'N/A';
+                        
+                        return `
+                            <tr>
+                                <td>
+                                    <strong style="color: #fff;">${escapeHtml(log.file_name)}</strong>
+                                    <div style="font-size: 0.7rem; color: var(--text-dim); font-family: var(--font-mono);">${log.ingestion_id}</div>
+                                </td>
+                                <td><span class="badge badge-outline">${log.file_type.toUpperCase()}</span></td>
+                                <td>${sizeKB}</td>
+                                <td><span class="badge badge-primary">${log.chunk_count} chunks</span></td>
+                                <td style="font-size: 0.8rem;">
+                                    Parse: <strong>${log.parsing_time_ms.toFixed(0)}ms</strong> |
+                                    Chunk: <strong>${log.chunking_time_ms.toFixed(0)}ms</strong> |
+                                    Embed: <strong>${log.embedding_time_ms.toFixed(0)}ms</strong> |
+                                    Index: <strong>${log.vector_indexing_time_ms.toFixed(0)}ms</strong>
+                                </td>
+                                <td style="font-weight: 600;">${log.total_time_ms.toFixed(0)} ms</td>
+                                <td>
+                                    <span class="badge ${statusClass}">${escapeHtml(log.status)}</span>
+                                    ${log.error_message ? `<div style="font-size: 0.7rem; color: var(--danger); margin-top: 0.2rem;" title="${escapeHtml(log.error_message)}">Err: ${escapeHtml(log.error_message)}</div>` : ''}
+                                </td>
+                                <td style="font-size: 0.8rem; color: var(--text-muted);">${created}</td>
+                            </tr>`;
+                    }).join('');
+                }
+            }
+        } catch (err) {
+            console.error('[Observability] Failed to load ingestions table:', err);
+        }
+    }
+
+    // Refresh Observability tab event handler
+    const btnRefreshObservability = document.getElementById('btn-refresh-observability');
+    if (btnRefreshObservability) {
+        btnRefreshObservability.addEventListener('click', () => {
+            fetchObservabilityStats();
+        });
+    }
+
     // ── Global Refresh Button Listener ──────────────────────────────
     DOM.btnRefreshAll.addEventListener('click', () => {
         showToast('Refreshing application state...', 'info');
         fetchDocuments();
         if (AppState.currentTab === 'tab-evaluation') {
             fetchEvaluationHistory();
+        } else if (AppState.currentTab === 'tab-observability') {
+            fetchObservabilityStats();
         }
     });
 

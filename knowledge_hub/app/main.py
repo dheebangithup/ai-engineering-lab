@@ -7,9 +7,10 @@ from typing import Optional, List
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from knowledge_hub.app.config import app_logger
 from knowledge_hub.app.config.database import Base, engine, get_db
@@ -17,10 +18,12 @@ from knowledge_hub.app.database.qdrant_store import QdrantStore
 from knowledge_hub.app.embeddings import LocalLMStudioEmbeddingProvider
 from knowledge_hub.app.enums import FileType
 from knowledge_hub.app.repositories import DocumentMetaDataRepository, ChunkMetaDataRepository
+from knowledge_hub.app.entity.telemetry import TelemetryLogEntity, IngestionLogEntity
 from knowledge_hub.app.service import IngestionService, DocumentMetaDataService, RetrievalService, LlmService, BM25RetrieverService
 from knowledge_hub.app.service.retrieval_service import RetrievalResult
 from knowledge_hub.app.model import SearchRequest, SearchResponse
 from knowledge_hub.app.model.api_reponse import ApiResponse, ResponseBuilder
+
 
 # Configure logging globally
 logging.basicConfig(
@@ -656,12 +659,219 @@ async def get_evaluation_run_details(
         
         app_logger.info(f"Successfully retrieved details for evaluation run '{run_id}' with {len(individual_results)} individual scores.")
         return ResponseBuilder.success(data=result_data, message="Successfully fetched run details")
+        app_logger.info(f"Successfully retrieved details for evaluation run '{run_id}' with {len(individual_results)} individual scores.")
+        return ResponseBuilder.success(data=result_data, message="Successfully fetched run details")
     except Exception as e:
         app_logger.error(f"Failed to fetch details for evaluation run '{run_id}'", exc_info=True)
         return ResponseBuilder.failure(
             message=f"Failed to fetch run details: {str(e)}",
             error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+# --- Observability & Metrics Endpoints ---
+@app.get("/metrics", tags=["Observability"], summary="Prometheus Metrics Endpoint")
+async def prometheus_metrics(db: Session = Depends(get_db)):
+    """
+    Exposes application metrics in standard Prometheus formatting.
+    """
+    app_logger.info("Observability API: GET /metrics requested")
+    try:
+        total_queries = db.query(TelemetryLogEntity).count()
+        failed_queries = db.query(TelemetryLogEntity).filter(TelemetryLogEntity.status == "FAILED").count()
+        total_tokens = db.query(func.sum(TelemetryLogEntity.total_tokens)).scalar() or 0
+        total_cost = db.query(func.sum(TelemetryLogEntity.cost)).scalar() or 0.0
+        avg_latency = db.query(func.avg(TelemetryLogEntity.total_latency_ms)).scalar() or 0.0
+        
+        total_ingestions = db.query(IngestionLogEntity).count()
+        failed_ingestions = db.query(IngestionLogEntity).filter(IngestionLogEntity.status == "FAILED").count()
+        
+        lines = [
+            "# HELP rag_queries_total Total search queries executed",
+            "# TYPE rag_queries_total counter",
+            f"rag_queries_total {total_queries}",
+            "",
+            "# HELP rag_queries_failed_total Total failed search queries",
+            "# TYPE rag_queries_failed_total counter",
+            f"rag_queries_failed_total {failed_queries}",
+            "",
+            "# HELP rag_tokens_consumed_total Total LLM tokens consumed",
+            "# TYPE rag_tokens_consumed_total counter",
+            f"rag_tokens_consumed_total {total_tokens}",
+            "",
+            "# HELP rag_llm_cost_usd_total Cumulative LLM API token costs in USD",
+            "# TYPE rag_llm_cost_usd_total counter",
+            f"rag_llm_cost_usd_total {total_cost:.6f}",
+            "",
+            "# HELP rag_query_latency_ms_avg Average query execution latency in milliseconds",
+            "# TYPE rag_query_latency_ms_avg gauge",
+            f"rag_query_latency_ms_avg {avg_latency:.2f}",
+            "",
+            "# HELP rag_ingestions_total Total document ingestions executed",
+            "# TYPE rag_ingestions_total counter",
+            f"rag_ingestions_total {total_ingestions}",
+            "",
+            "# HELP rag_ingestions_failed_total Total failed document ingestions",
+            "# TYPE rag_ingestions_failed_total counter",
+            f"rag_ingestions_failed_total {failed_ingestions}"
+        ]
+        app_logger.info("Observability API: /metrics compiled successfully")
+        return HTMLResponse(content="\n".join(lines) + "\n", media_type="text/plain")
+    except Exception as e:
+        app_logger.error("Observability API: Failed to compile prometheus /metrics", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate metrics: {str(e)}"
+        )
+
+@app.get("/api/v1/observability/stats", tags=["Observability"], summary="Get aggregated RAG dashboard stats")
+async def get_observability_stats(db: Session = Depends(get_db)):
+    """
+    Computes and returns high-level aggregate statistics for queries, token usage, latencies, and ingestion.
+    """
+    app_logger.info("Observability API: GET /api/v1/observability/stats requested")
+    try:
+        # Query logs aggregates
+        total_queries = db.query(TelemetryLogEntity).count()
+        failed_queries = db.query(TelemetryLogEntity).filter(TelemetryLogEntity.status == "FAILED").count()
+        success_queries = total_queries - failed_queries
+        
+        avg_total_latency = db.query(func.avg(TelemetryLogEntity.total_latency_ms)).scalar() or 0.0
+        avg_llm_latency = db.query(func.avg(TelemetryLogEntity.llm_latency_ms)).scalar() or 0.0
+        avg_embedding_latency = db.query(func.avg(TelemetryLogEntity.embedding_latency_ms)).scalar() or 0.0
+        
+        total_prompt_tokens = db.query(func.sum(TelemetryLogEntity.prompt_tokens)).scalar() or 0
+        total_completion_tokens = db.query(func.sum(TelemetryLogEntity.completion_tokens)).scalar() or 0
+        total_tokens = db.query(func.sum(TelemetryLogEntity.total_tokens)).scalar() or 0
+        total_cost = db.query(func.sum(TelemetryLogEntity.cost)).scalar() or 0.0
+        
+        # Ingestion logs aggregates
+        total_ingestions = db.query(IngestionLogEntity).count()
+        failed_ingestions = db.query(IngestionLogEntity).filter(IngestionLogEntity.status == "FAILED").count()
+        success_ingestions = total_ingestions - failed_ingestions
+        
+        avg_ingest_parsing = db.query(func.avg(IngestionLogEntity.parsing_time_ms)).scalar() or 0.0
+        avg_ingest_chunking = db.query(func.avg(IngestionLogEntity.chunking_time_ms)).scalar() or 0.0
+        avg_ingest_embedding = db.query(func.avg(IngestionLogEntity.embedding_time_ms)).scalar() or 0.0
+        avg_ingest_vector = db.query(func.avg(IngestionLogEntity.vector_indexing_time_ms)).scalar() or 0.0
+        avg_ingest_total = db.query(func.avg(IngestionLogEntity.total_time_ms)).scalar() or 0.0
+        
+        # Mode distribution
+        mode_counts = {}
+        modes = db.query(TelemetryLogEntity.retrieval_mode, func.count(TelemetryLogEntity.request_id)).group_by(TelemetryLogEntity.retrieval_mode).all()
+        for mode, count in modes:
+            mode_counts[mode] = count
+
+        stats = {
+            "queries": {
+                "total": total_queries,
+                "success": success_queries,
+                "failed": failed_queries,
+                "success_rate": round((success_queries / total_queries * 100), 2) if total_queries > 0 else 100.0,
+                "avg_total_latency_ms": round(avg_total_latency, 2),
+                "avg_llm_latency_ms": round(avg_llm_latency, 2),
+                "avg_embedding_latency_ms": round(avg_embedding_latency, 2)
+            },
+            "tokens": {
+                "prompt": total_prompt_tokens,
+                "completion": total_completion_tokens,
+                "total": total_tokens,
+                "cost_usd": round(total_cost, 6)
+            },
+            "ingestions": {
+                "total": total_ingestions,
+                "success": success_ingestions,
+                "failed": failed_ingestions,
+                "avg_parsing_ms": round(avg_ingest_parsing, 2),
+                "avg_chunking_ms": round(avg_ingest_chunking, 2),
+                "avg_embedding_ms": round(avg_ingest_embedding, 2),
+                "avg_vector_indexing_ms": round(avg_ingest_vector, 2),
+                "avg_total_ms": round(avg_ingest_total, 2)
+            },
+            "retrieval_modes": mode_counts
+        }
+        
+        app_logger.info("Observability API: Stats aggregated successfully.")
+        return ResponseBuilder.success(data=stats, message="Successfully computed observability stats")
+    except Exception as e:
+        app_logger.error("Observability API: Failed to compute observability stats", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to fetch stats: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.get("/api/v1/observability/queries", tags=["Observability"], summary="Get detailed search query telemetry history")
+async def get_query_logs(limit: int = 50, db: Session = Depends(get_db)):
+    """
+    Returns a history of recent query logs, latencies, costs, and token usages.
+    """
+    app_logger.info(f"Observability API: GET /api/v1/observability/queries requested (limit={limit})")
+    try:
+        logs = db.query(TelemetryLogEntity).order_by(TelemetryLogEntity.created_at.desc()).limit(limit).all()
+        result = []
+        for log in logs:
+            result.append({
+                "request_id": str(log.request_id),
+                "query": log.query,
+                "response_answer": log.response_answer,
+                "retrieval_mode": log.retrieval_mode,
+                "llm_provider": log.llm_provider,
+                "llm_model": log.llm_model,
+                "prompt_tokens": log.prompt_tokens,
+                "completion_tokens": log.completion_tokens,
+                "total_tokens": log.total_tokens,
+                "cost": log.cost,
+                "llm_latency_ms": log.llm_latency_ms,
+                "embedding_latency_ms": log.embedding_latency_ms,
+                "total_latency_ms": log.total_latency_ms,
+                "retrieved_chunks": log.retrieved_chunks,
+                "status": log.status,
+                "error_message": log.error_message,
+                "created_at": log.created_at.isoformat() if log.created_at else None
+            })
+        app_logger.info(f"Observability API: Successfully returned {len(result)} query logs.")
+        return ResponseBuilder.success(data=result, message=f"Successfully fetched {len(result)} query logs")
+    except Exception as e:
+        app_logger.error("Observability API: Failed to fetch query logs", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to fetch query logs: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@app.get("/api/v1/observability/ingestions", tags=["Observability"], summary="Get detailed document ingestion logs")
+async def get_ingestion_logs(limit: int = 50, db: Session = Depends(get_db)):
+    """
+    Returns a history of recent document ingestion logs, including file info and phase latencies.
+    """
+    app_logger.info(f"Observability API: GET /api/v1/observability/ingestions requested (limit={limit})")
+    try:
+        logs = db.query(IngestionLogEntity).order_by(IngestionLogEntity.created_at.desc()).limit(limit).all()
+        result = []
+        for log in logs:
+            result.append({
+                "ingestion_id": str(log.ingestion_id),
+                "document_id": str(log.document_id) if log.document_id else None,
+                "file_name": log.file_name,
+                "file_type": log.file_type,
+                "file_size": log.file_size,
+                "chunk_count": log.chunk_count,
+                "parsing_time_ms": log.parsing_time_ms,
+                "chunking_time_ms": log.chunking_time_ms,
+                "embedding_time_ms": log.embedding_time_ms,
+                "vector_indexing_time_ms": log.vector_indexing_time_ms,
+                "total_time_ms": log.total_time_ms,
+                "status": log.status,
+                "error_message": log.error_message,
+                "created_at": log.created_at.isoformat() if log.created_at else None
+            })
+        app_logger.info(f"Observability API: Successfully returned {len(result)} ingestion logs.")
+        return ResponseBuilder.success(data=result, message=f"Successfully fetched {len(result)} ingestion logs")
+    except Exception as e:
+        app_logger.error("Observability API: Failed to fetch ingestion logs", exc_info=True)
+        return ResponseBuilder.failure(
+            message=f"Failed to fetch ingestion logs: {str(e)}",
+            error_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
 
 if __name__ == "__main__":
         uvicorn.run(

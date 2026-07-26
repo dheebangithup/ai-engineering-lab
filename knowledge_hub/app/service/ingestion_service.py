@@ -1,9 +1,12 @@
 import uuid
+import time
+import os
 from typing import Optional
 from knowledge_hub.app.config import app_logger
 from knowledge_hub.app.database.vector_store import VectorStore
 from knowledge_hub.app.embeddings.embedding_provider import EmbeddingProvider
 from knowledge_hub.app.entity import DocumentMetaDataEntity, ChunkMetaDataEntity
+from knowledge_hub.app.entity.telemetry import IngestionLogEntity
 from knowledge_hub.app.enums import FileType
 from knowledge_hub.app.model import EmbeddedDocument, Document
 from knowledge_hub.app.processor.document_processor import DocumentProcessor
@@ -46,6 +49,19 @@ class IngestionService:
 
     def ingest(self, file_path: str, file_type: FileType, doc_version: str, doc_id: str = None):
         doc_meta = None
+        start_time = time.perf_counter()
+        
+        parsing_time_ms = 0.0
+        chunking_time_ms = 0.0
+        embedding_time_ms = 0.0
+        vector_indexing_time_ms = 0.0
+        
+        file_size = 0
+        try:
+            file_size = os.path.getsize(file_path)
+        except Exception as fs_err:
+            app_logger.warning(f"IngestionService: Could not determine file size for '{file_path}': {fs_err}")
+
         try:
             app_logger.info(f"IngestionService: Starting ingestion pipeline for file '{file_path}' (type={file_type.value}, doc_id={doc_id})")
 
@@ -118,25 +134,32 @@ class IngestionService:
                 app_logger.info(f"IngestionService: Document metadata created in DB with ID: {doc_meta.document_id}")
 
             app_logger.info(f"IngestionService: Invoking document processor '{self.processor.__class__.__name__}'")
+            parsing_start = time.perf_counter()
             documents = self.processor.process(file_path, doc_meta)
+            parsing_time_ms = round((time.perf_counter() - parsing_start) * 1000, 2)
             
             # Update total pages and other info in metadata DB
             self.meta_data_service.update_doc(doc_meta)
-            app_logger.info(f"IngestionService: Document processing completed. Generated {len(documents)} chunks.")
+            app_logger.info(f"IngestionService: Document processing completed. Generated {len(documents)} chunks in {parsing_time_ms:.2f}ms.")
 
+            chunk_start = time.perf_counter()
             if is_update_flow and not config_changed:
                 # Compare and filter documents before generating embeddings
                 documents_to_embed = self.update_doc(doc_meta, documents)
             else:
                 # For new documents or config changes, embed all chunks
                 documents_to_embed = documents
+            chunking_time_ms = round((time.perf_counter() - chunk_start) * 1000, 2)
 
             if documents_to_embed:
                 app_logger.info(f"IngestionService: Commencing chunk embedding generation for {len(documents_to_embed)} chunks.")
+                embed_start = time.perf_counter()
                 embedded_chunks = self.embedding_provider.embed(documents_to_embed)
-                app_logger.info(f"IngestionService: Embedding phase completed. Embedded {len(embedded_chunks)} chunks.")
+                embedding_time_ms = round((time.perf_counter() - embed_start) * 1000, 2)
+                app_logger.info(f"IngestionService: Embedding phase completed in {embedding_time_ms:.2f}ms. Embedded {len(embedded_chunks)} chunks.")
                 
                 app_logger.info("IngestionService: Upserting embedded chunks into vector store.")
+                index_start = time.perf_counter()
                 self.vector_store.upsert(embedded_chunks)
                 app_logger.info("IngestionService: Vector store upsert completed successfully.")
 
@@ -157,6 +180,7 @@ class IngestionService:
                         )
                         # Non-fatal: BM25 index refresh failure should not block ingestion pipeline
                         app_logger.warning("IngestionService: Ingestion will continue despite BM25 index refresh failure.")
+                vector_indexing_time_ms = round((time.perf_counter() - index_start) * 1000, 2)
             else:
                 app_logger.info("IngestionService: No chunks require embedding or vector store upsert (identical content).")
             
@@ -189,10 +213,36 @@ class IngestionService:
             
             doc_meta.status = "SUCCESS"
             self.meta_data_service.update_doc(doc_meta)
-            app_logger.info(f"IngestionService: Ingestion pipeline completed successfully for document_id={doc_meta.document_id}")
+            
+            total_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            app_logger.info(f"IngestionService: Ingestion pipeline completed successfully for document_id={doc_meta.document_id} in {total_time_ms:.2f}ms")
+            
+            # Save Ingestion Run Log
+            try:
+                db_session = self.meta_data_service.doc_repo.db
+                ingestion_log = IngestionLogEntity(
+                    document_id=doc_meta.document_id,
+                    file_name=doc_meta.file_name,
+                    file_type=file_type.value,
+                    file_size=file_size,
+                    chunk_count=len(documents),
+                    parsing_time_ms=parsing_time_ms,
+                    chunking_time_ms=chunking_time_ms,
+                    embedding_time_ms=embedding_time_ms,
+                    vector_indexing_time_ms=vector_indexing_time_ms,
+                    total_time_ms=total_time_ms,
+                    status="SUCCESS"
+                )
+                db_session.add(ingestion_log)
+                db_session.commit()
+                app_logger.info(f"IngestionService: Saved Ingestion Log metadata successfully in DB.")
+            except Exception as log_err:
+                app_logger.error(f"IngestionService: Failed to save success Ingestion Log to DB: {log_err}", exc_info=True)
+
             return doc_meta
 
         except Exception as e:
+            total_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
             app_logger.error(f"IngestionService: Critical error during ingestion pipeline execution for file '{file_path}'", exc_info=True)
             if doc_meta is not None:
                 try:
@@ -201,6 +251,30 @@ class IngestionService:
                     app_logger.info(f"IngestionService: Updated document_id={doc_meta.document_id} status to 'FAILED'.")
                 except Exception as db_err:
                     app_logger.error(f"IngestionService: Failed to update document status to 'FAILED': {db_err}", exc_info=True)
+            
+            # Save Ingestion Failure Run Log
+            try:
+                db_session = self.meta_data_service.doc_repo.db
+                ingestion_log = IngestionLogEntity(
+                    document_id=doc_meta.document_id if doc_meta else None,
+                    file_name=file_path.split("/")[-1] if "/" in file_path else file_path.split("\\")[-1],
+                    file_type=file_type.value,
+                    file_size=file_size,
+                    chunk_count=0,
+                    parsing_time_ms=parsing_time_ms,
+                    chunking_time_ms=chunking_time_ms,
+                    embedding_time_ms=embedding_time_ms,
+                    vector_indexing_time_ms=vector_indexing_time_ms,
+                    total_time_ms=total_time_ms,
+                    status="FAILED",
+                    error_message=str(e)
+                )
+                db_session.add(ingestion_log)
+                db_session.commit()
+                app_logger.info("IngestionService: Saved failure Ingestion Log metadata successfully in DB.")
+            except Exception as log_err:
+                app_logger.error(f"IngestionService: Failed to save failure Ingestion Log to DB: {log_err}", exc_info=True)
+                
             raise e
 
 

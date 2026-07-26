@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -50,6 +51,8 @@ from knowledge_hub.app.model.chunk_payload import ChunkPayload
 from knowledge_hub.app.prompts import RenderedPrompt, prompt_registry
 from knowledge_hub.app.service.document_metadata_service import DocumentMetaDataService
 from knowledge_hub.app.service.llm_service import LlmService, LLMGenerationResult
+from knowledge_hub.app.entity.telemetry import TelemetryLogEntity
+from knowledge_hub.app.utils.cost_calculator import CostCalculator
 
 logger = logging.getLogger("app")
 
@@ -123,6 +126,9 @@ class RetrievalService:
             ApiResponse[RetrievalResult] on success.
             ApiResponse[None] on validation failure or unhandled exception.
         """
+        start_time = time.perf_counter()
+        embedding_latency_ms = 0.0
+        
         eff_enable_llm = (
             option.enable_llm_generation
             if option.enable_llm_generation is not None
@@ -156,7 +162,9 @@ class RetrievalService:
 
         try:
             # ── 2. Retrieval Mode Router ───────────────────────────────────
+            embed_start = time.perf_counter()
             search_response = self._execute_retrieval(option, retrieval_mode)
+            embedding_latency_ms = round((time.perf_counter() - embed_start) * 1000, 2)
 
             if not search_response or not search_response.results:
                 logger.info(
@@ -170,6 +178,32 @@ class RetrievalService:
                     chunk_count=0,
                     pipeline_stats={"input_count": 0, "retrieval_mode": retrieval_mode.value},
                 )
+                total_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                
+                # Persist empty result query log
+                try:
+                    db_session = self.__metadata_service.doc_repo.db
+                    telemetry_log = TelemetryLogEntity(
+                        query=option.query,
+                        response_answer=None,
+                        retrieval_mode=retrieval_mode.value,
+                        llm_provider=self.__llm_service._provider,
+                        llm_model=self.__llm_service._resolved_model_name,
+                        prompt_tokens=0,
+                        completion_tokens=0,
+                        total_tokens=0,
+                        cost=0.0,
+                        llm_latency_ms=0.0,
+                        embedding_latency_ms=embedding_latency_ms,
+                        total_latency_ms=total_latency_ms,
+                        retrieved_chunks=[],
+                        status="SUCCESS"
+                    )
+                    db_session.add(telemetry_log)
+                    db_session.commit()
+                except Exception as log_err:
+                    logger.error(f"RetrievalService: Failed to save empty query telemetry to DB: {log_err}", exc_info=True)
+                
                 return ResponseBuilder.success(
                     RetrievalResult(
                         search_response=search_response,
@@ -284,14 +318,108 @@ class RetrievalService:
                 rendered_prompt=rendered_prompt,
                 llm_response=llm_result,
             )
+
+            # Compute LLM statistics & token cost
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            llm_latency_ms = 0.0
+            if llm_result:
+                llm_latency_ms = llm_result.latency_ms
+                if llm_result.usage:
+                    usage = llm_result.usage
+                    token_usage = usage.get("token_usage") or usage.get("usage")
+                    if isinstance(token_usage, dict):
+                        prompt_tokens = token_usage.get("prompt_tokens") or token_usage.get("input_tokens") or 0
+                        completion_tokens = token_usage.get("completion_tokens") or token_usage.get("output_tokens") or 0
+                        total_tokens = token_usage.get("total_tokens") or (prompt_tokens + completion_tokens)
+                    else:
+                        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+                        completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+                        total_tokens = usage.get("total_tokens") or (prompt_tokens + completion_tokens)
+
+            cost = CostCalculator.calculate(
+                provider=self.__llm_service._provider,
+                model_name=self.__llm_service._resolved_model_name,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens
+            )
+
+            # Format retrieved chunks list
+            retrieved_chunks = []
+            if search_response and search_response.results:
+                for rank, res in enumerate(search_response.results):
+                    retrieved_chunks.append({
+                        "chunk_id": str(res.document.chunk_id) if res.document and res.document.chunk_id else None,
+                        "document_id": str(res.document.document_id) if res.document and res.document.document_id else None,
+                        "file_name": res.document.file_name if res.document and res.document.file_name else None,
+                        "page_number": res.document.page_number if res.document and res.document.page_number is not None else 1,
+                        "score": res.score,
+                        "rank": rank + 1
+                    })
+
+            total_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+            # Save Telemetry Log to DB
+            try:
+                db_session = self.__metadata_service.doc_repo.db
+                telemetry_log = TelemetryLogEntity(
+                    query=option.query,
+                    response_answer=llm_result.answer if llm_result else None,
+                    retrieval_mode=retrieval_mode.value,
+                    llm_provider=self.__llm_service._provider,
+                    llm_model=self.__llm_service._resolved_model_name,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    cost=cost,
+                    llm_latency_ms=llm_latency_ms,
+                    embedding_latency_ms=embedding_latency_ms,
+                    total_latency_ms=total_latency_ms,
+                    retrieved_chunks=retrieved_chunks,
+                    status="SUCCESS"
+                )
+                db_session.add(telemetry_log)
+                db_session.commit()
+                logger.info("RetrievalService: Telemetry Log saved successfully.")
+            except Exception as log_err:
+                logger.error(f"RetrievalService: Failed to save Telemetry Log to DB: {log_err}", exc_info=True)
+
             return ResponseBuilder.success(result, "success")
 
         except Exception as e:
+            total_latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
             logger.error(
                 "RetrievalService.search: unhandled exception during retrieval for query='%s': %s",
                 option.query, str(e),
                 exc_info=True,
             )
+            # Save Telemetry Log as FAILURE
+            try:
+                db_session = self.__metadata_service.doc_repo.db
+                telemetry_log = TelemetryLogEntity(
+                    query=option.query,
+                    response_answer=None,
+                    retrieval_mode=retrieval_mode.value if 'retrieval_mode' in locals() else "dense",
+                    llm_provider=self.__llm_service._provider,
+                    llm_model=self.__llm_service._resolved_model_name,
+                    prompt_tokens=0,
+                    completion_tokens=0,
+                    total_tokens=0,
+                    cost=0.0,
+                    llm_latency_ms=0.0,
+                    embedding_latency_ms=embedding_latency_ms if 'embedding_latency_ms' in locals() else 0.0,
+                    total_latency_ms=total_latency_ms,
+                    retrieved_chunks=[],
+                    status="FAILED",
+                    error_message=str(e)
+                )
+                db_session.add(telemetry_log)
+                db_session.commit()
+                logger.info("RetrievalService: Failure Telemetry Log saved to DB.")
+            except Exception as log_err:
+                logger.error(f"RetrievalService: Failed to save failure Telemetry Log to DB: {log_err}", exc_info=True)
+
             return ResponseBuilder.failure("An internal error occurred during retrieval.")
 
     # ------------------------------------------------------------------
