@@ -57,11 +57,15 @@ The Enterprise Knowledge Hub divides document processing and retrieval into deco
 - **Pluggable Architecture**: Implements the Strategy Pattern using a base `DocumentProcessor` class. You can dynamically swap parsing engines (e.g., Unstructured, or integrate **Docling** and **LlamaParse**) and chunking boundaries without modifying the ingestion runner.
 - **Incremental Page-Level Invalidation**: Compares new document structures page-by-page against PostgreSQL database hashes. In a content update, it deletes and re-embeds *only* the pages starting from the lowest edited page, saving significant LLM embedding costs.
 
+![Ingestion Studio](docs/images/ingestion_studio.png)
+
 ### 2. Hybrid Retrieval & Search Router
 - **Dense Semantic Retrieval**: Computes query embeddings to fetch similar vector records from Qdrant using Cosine similarity.
 - **Sparse Keyword Search**: Maintains an in-memory BM25 index generated dynamically from vector payload content.
 - **Reciprocal Rank Fusion (RRF)**: Combines dense vector and sparse keyword results, ranking candidates using standard RRF formulas with custom fusion weights:
   $$\text{RRF Score} = \sum_{i \in \text{Runs}} w_i \times \frac{1}{k + \text{Rank}_i}$$
+
+![Hybrid Search](docs/images/hybrid_search.png)
 
 ### 3. ContextBuilder Pipeline
 - Resolves token budget boundaries before prompting the LLM.
@@ -73,6 +77,18 @@ The Enterprise Knowledge Hub divides document processing and retrieval into deco
 - **Token Cost Tracking**: Dynamically estimates LLM API token execution costs in USD using pricing models for Groq, OpenAI, and Local engines.
 - **Prometheus Metrics**: Exposes a `/metrics` scraping endpoint showing request rates, error rates, average latencies, and token costs.
 - **Observability Dashboard**: Built-in UI dashboard presenting aggregated metrics cards and detailed query logs.
+
+![Observability Dashboard](docs/images/observability.png)
+
+---
+
+## 🖥️ Screen Showcases
+
+### Document Metadata Registry
+![Document Registry](docs/images/docs_registry.png)
+
+### Automated RAGAS Evaluation Center
+![RAGAS Evaluation](docs/images/eval_report.png)
 
 ---
 
