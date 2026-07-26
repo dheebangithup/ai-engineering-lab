@@ -785,10 +785,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>`;
             }
 
-            const retrievalModeBadge = stats.retrieval_mode 
-                ? `<span>Mode: <strong style="color: ${stats.retrieval_mode === 'hybrid' ? '#a78bfa' : (stats.retrieval_mode === 'bm25' ? '#fbbf24' : '#60a5fa')}">${stats.retrieval_mode.toUpperCase()}</strong></span>` 
+            const retrievalModeBadge = stats.retrieval_mode
+                ? `<span>Mode: <strong style="color: ${stats.retrieval_mode === 'hybrid' ? '#a78bfa' : (stats.retrieval_mode === 'bm25' ? '#fbbf24' : '#60a5fa')}">${stats.retrieval_mode.toUpperCase()}</strong></span>`
                 : '';
-            
+
             // Generate extra retrieval metrics for hybrid search
             let hybridStatsHtml = '';
             if (stats.retrieval_mode === 'hybrid') {
@@ -815,7 +815,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>`;
 
             const contextText = built_context.context_str || '(No context assembled — all candidate chunks dropped by pipeline score filter)';
-            DOM.contextTextBlock.parentElement.innerHTML = statsHtml + statsBar + `<pre class="code-block" id="context-text-block">${escapeHtml(contextText)}</pre>`;
+            const ctxBlock = document.getElementById('context-text-block');
+            if (ctxBlock && ctxBlock.parentElement) {
+                ctxBlock.parentElement.innerHTML = statsHtml + statsBar + `<pre class="code-block" id="context-text-block">${escapeHtml(contextText)}</pre>`;
+            }
         }
 
         // 4. Provisioned Prompt
@@ -905,7 +908,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const type = DOM.evalType.value;
         const defaultData = DEFAULT_EVAL_JSON[type];
         DOM.evalDatasetEditor.value = JSON.stringify(defaultData, null, 4);
-        
+
         if (type === 'pipeline') {
             if (DOM.evalRetrievalModeWrapper) DOM.evalRetrievalModeWrapper.style.display = 'block';
             DOM.evalSchemaInfo.style.background = 'rgba(59, 130, 246, 0.08)';
@@ -1105,11 +1108,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── API Function: View Detailed Evaluation Report ────────────────
     async function viewEvaluationReport(runId) {
         console.log(`[API Call] Requesting GET /api/v1/evaluate/runs/${runId}...`);
-        
+
         // Hide history view, show detailed report with loaders
         DOM.evalHistoryList.classList.add('hidden');
         DOM.evalDetailedReport.classList.remove('hidden');
-        
+
         DOM.reportRunTitle.textContent = "Loading run details...";
         DOM.reportRunMeta.textContent = "";
         DOM.reportRunDate.textContent = "";
@@ -1117,7 +1120,7 @@ document.addEventListener('DOMContentLoaded', () => {
         DOM.valAvgRelevance.textContent = "0.0000";
         DOM.valAvgRecall.textContent = "0.0000";
         DOM.valAvgPrecision.textContent = "0.0000";
-        
+
         DOM.evalDetailsTableBody.innerHTML = `
             <tr>
                 <td colspan="5" class="text-center py-4 text-muted">
@@ -1132,7 +1135,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (result.success && result.data) {
                 const run = result.data;
                 const created = run.created_at ? new Date(run.created_at).toLocaleString() : 'N/A';
-                
+
                 // Populate run details
                 DOM.reportRunTitle.innerHTML = `<i class="fa-solid fa-square-poll-vertical text-primary"></i> ${escapeHtml(run.run_name || 'Evaluation Report')}`;
                 DOM.reportRunMeta.textContent = `Provider: ${run.provider.toUpperCase()} | Model: ${run.eval_model}`;
@@ -1141,13 +1144,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Populate aggregates (with score coloring classes)
                 DOM.valAvgFaithfulness.textContent = formatScoreValue(run.avg_faithfulness);
                 DOM.valAvgFaithfulness.className = `metric-value mt-1 ${getScoreColorClass(run.avg_faithfulness)}`;
-                
+
                 DOM.valAvgRelevance.textContent = formatScoreValue(run.avg_answer_relevance);
                 DOM.valAvgRelevance.className = `metric-value mt-1 ${getScoreColorClass(run.avg_answer_relevance)}`;
-                
+
                 DOM.valAvgRecall.textContent = formatScoreValue(run.avg_context_recall);
                 DOM.valAvgRecall.className = `metric-value mt-1 ${getScoreColorClass(run.avg_context_recall)}`;
-                
+
                 DOM.valAvgPrecision.textContent = formatScoreValue(run.avg_context_precision);
                 DOM.valAvgPrecision.className = `metric-value mt-1 ${getScoreColorClass(run.avg_context_precision)}`;
 
@@ -1221,14 +1224,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             <div class="eval-details-section">
                                 <h5><i class="fa-solid fa-database text-primary"></i> Retrieved Context Chunks</h5>
                                 <div class="eval-details-content">
-                                    ${res.contexts && res.contexts.length > 0 ? 
-                                        res.contexts.map((ctx, cIdx) => `
+                                    ${res.contexts && res.contexts.length > 0 ?
+                    res.contexts.map((ctx, cIdx) => `
                                             <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">
                                                 <strong style="color: var(--primary);">Chunk #${cIdx + 1}:</strong>
                                                 <p style="margin-top: 0.25rem; font-family: var(--font-mono); font-size: 0.75rem;">${escapeHtml(ctx)}</p>
                                             </div>`).join('')
-                                        : 'No context retrieved for this query.'
-                                    }
+                    : 'No context retrieved for this query.'
+                }
                                 </div>
                             </div>
                         </div>
@@ -1274,7 +1277,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Observability & Telemetry Dash Logic ─────────────────────────
     async function fetchObservabilityStats() {
         console.log('[API Call] Fetching observability statistics and logs...');
-        
+
         const qTotal = document.getElementById('obs-total-queries');
         const qRate = document.getElementById('obs-query-success-rate');
         const cTotal = document.getElementById('obs-total-cost');
@@ -1283,13 +1286,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const tSplit = document.getElementById('obs-token-split');
         const lAvg = document.getElementById('obs-avg-latency');
         const lSplit = document.getElementById('obs-latency-split');
-        
+
         const pAvg = document.getElementById('obs-avg-parsing');
         const chAvg = document.getElementById('obs-avg-chunking');
         const eAvg = document.getElementById('obs-avg-embedding');
         const vAvg = document.getElementById('obs-avg-vector');
         const iTotal = document.getElementById('obs-avg-ingest-total');
-        
+
         const dCount = document.getElementById('obs-count-dense');
         const bCount = document.getElementById('obs-count-bm25');
         const hCount = document.getElementById('obs-count-hybrid');
@@ -1300,26 +1303,26 @@ document.addEventListener('DOMContentLoaded', () => {
             const statsResult = await statsRes.json();
             if (statsResult.success && statsResult.data) {
                 const s = statsResult.data;
-                
+
                 if (qTotal) qTotal.textContent = s.queries.total;
                 if (qRate) qRate.textContent = `Success Rate: ${s.queries.success_rate}% (${s.queries.success} / ${s.queries.total})`;
-                
+
                 if (cTotal) cTotal.textContent = `$${s.tokens.cost_usd.toFixed(6)}`;
                 const avgCost = s.queries.total > 0 ? (s.tokens.cost_usd / s.queries.total) : 0;
                 if (cAvg) cAvg.textContent = `Avg: $${avgCost.toFixed(4)} / q`;
-                
+
                 if (tTotal) tTotal.textContent = s.tokens.total.toLocaleString();
                 if (tSplit) tSplit.textContent = `Prompt: ${s.tokens.prompt.toLocaleString()} | Comp: ${s.tokens.completion.toLocaleString()}`;
-                
+
                 if (lAvg) lAvg.textContent = `${s.queries.avg_total_latency_ms} ms`;
                 if (lSplit) lSplit.textContent = `LLM: ${s.queries.avg_llm_latency_ms}ms | Embed: ${s.queries.avg_embedding_latency_ms}ms`;
-                
+
                 if (pAvg) pAvg.textContent = `${s.ingestions.avg_parsing_ms} ms`;
                 if (chAvg) chAvg.textContent = `${s.ingestions.avg_chunking_ms} ms`;
                 if (eAvg) eAvg.textContent = `${s.ingestions.avg_embedding_ms} ms`;
                 if (vAvg) vAvg.textContent = `${s.ingestions.avg_vector_indexing_ms} ms`;
                 if (iTotal) iTotal.textContent = `${s.ingestions.avg_total_ms} ms`;
-                
+
                 if (dCount) dCount.textContent = `${s.retrieval_modes.dense || 0} queries`;
                 if (bCount) bCount.textContent = `${s.retrieval_modes.bm25 || 0} queries`;
                 if (hCount) hCount.textContent = `${s.retrieval_modes.hybrid || 0} queries`;
@@ -1334,7 +1337,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const queriesRes = await fetch('/api/v1/observability/queries?limit=25');
             const queriesResult = await queriesRes.json();
             const queriesTableBody = document.getElementById('obs-queries-table-body');
-            
+
             if (queriesResult.success && Array.isArray(queriesResult.data) && queriesTableBody) {
                 const logs = queriesResult.data;
                 if (logs.length === 0) {
@@ -1384,7 +1387,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const ingestionsRes = await fetch('/api/v1/observability/ingestions?limit=25');
             const ingestionsResult = await ingestionsRes.json();
             const ingestionsTableBody = document.getElementById('obs-ingestions-table-body');
-            
+
             if (ingestionsResult.success && Array.isArray(ingestionsResult.data) && ingestionsTableBody) {
                 const logs = ingestionsResult.data;
                 if (logs.length === 0) {
@@ -1399,7 +1402,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-danger';
                         const created = log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A';
                         const sizeKB = log.file_size ? `${(log.file_size / 1024).toFixed(1)} KB` : 'N/A';
-                        
+
                         return `
                             <tr>
                                 <td>
