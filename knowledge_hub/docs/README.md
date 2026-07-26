@@ -18,6 +18,9 @@ Welcome to the technical documentation directory for the Enterprise Knowledge Hu
 ### 4. Configuration & Setup
 * **[Configuration Guide](configuration.md)**: Explains environment variables (`.env`), LLM/embedding provider configurations (LM Studio, Groq, OpenAI), and retrieval fusion parameters.
 
-### 5. API Reference
+### 5. Security & Data Privacy
+* **[Security Architecture](security.md)**: Details system input validation, data isolation (pre-filtering), and RAG-specific security defenses (prompt injection, jailbreaking, context poisoning).
+
+### 6. API Reference
 * **[Retrieval API Reference](api/retrieval_api_reference.md)**: Detailed JSON payloads and endpoint specifications for search, ingestion, evaluation, and telemetry metrics.
 * **[Retrieval API Payloads](api/retrieval_api_payloads.md)**: Input/output example schemas for developers integrating the RAG engine.

@@ -141,4 +141,9 @@ Open `http://localhost:8000/` in your browser to access the RAG Playground UI.
 ---
 
 ## 📚 Detailed Documentation
-Refer to the [docs/README.md](docs/README.md) directory for detailed explanations of each platform layer.
+Refer to the [docs/README.md](docs/README.md) directory for technical details on individual platform layers:
+- 🚀 **[Ingestion Pipeline](docs/ingestion_flow.md)**: Strategies, chunk boundaries, and page-level invalidation rules.
+- 🔍 **[Retrieval & Search](docs/retrieval.md)**: Dense, BM25, and Hybrid RRF fusion models.
+- 🔒 **[Security Architecture](docs/security.md)**: Defense patterns against prompt injection, jailbreaks, and context poisoning.
+- 📈 **[Observability & Telemetry](docs/observability.md)**: Databases, token cost tracking, and Prometheus metrics.
+- ⚙️ **[Configuration settings](docs/configuration.md)**: Model integrations, env variables, and deployment settings.
