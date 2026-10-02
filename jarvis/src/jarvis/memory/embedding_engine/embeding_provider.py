@@ -6,6 +6,7 @@ from llama_cpp import Llama
 from .config import EmbeddingConfig
 from .exceptions import ModelLoadError
 from .model_manager import ModelManager
+from jarvis.workspace import Workspace, default_workspace
 
 
 class EmbeddingProvider:
@@ -13,11 +14,14 @@ class EmbeddingProvider:
     def __init__(
         self,
         config: EmbeddingConfig | None = None,
+        workspace: Workspace | None = None,
     ):
         self.config = config or EmbeddingConfig()
+        self.workspace = workspace or default_workspace()
 
         self.model_manager = ModelManager(
-            self.config
+            config=self.config,
+            workspace=self.workspace,
         )
 
         self._model: Llama | None = None

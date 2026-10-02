@@ -10,3 +10,4 @@ venv/**
 /.env
 knowledge_hub/data/*
 knowledge_hub/.env
+data/

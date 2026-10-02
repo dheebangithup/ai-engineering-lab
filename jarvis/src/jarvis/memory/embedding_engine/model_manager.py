@@ -2,33 +2,37 @@ from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 
+from jarvis.workspace import Workspace
+
 from .config import EmbeddingConfig
 from .exceptions import ModelDownloadError
 
 
 class ModelManager:
 
-    def __init__(self, config: EmbeddingConfig):
+    def __init__(
+        self,
+        config: EmbeddingConfig,
+        workspace: Workspace,
+    ):
         self.config = config
+        self.workspace = workspace
 
     @property
     def model_path(self) -> Path:
-        return self.config.model_dir / self.config.model_filename
+        return (
+            self.workspace.embedding_models_dir
+            / self.config.model_filename
+        )
 
     def is_downloaded(self) -> bool:
         return self.model_path.exists()
 
     def ensure_model(self) -> Path:
-        """
-        Make sure the embedding model exists locally.
-
-        Downloads the model automatically if it is missing.
-        """
-
         if self.is_downloaded():
             return self.model_path
 
-        self.config.model_dir.mkdir(
+        self.workspace.embedding_models_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
@@ -42,7 +46,7 @@ class ModelManager:
             downloaded_path = hf_hub_download(
                 repo_id=self.config.model_repo,
                 filename=self.config.model_filename,
-                local_dir=self.config.model_dir,
+                local_dir=self.workspace.embedding_models_dir,
             )
 
             return Path(downloaded_path)
