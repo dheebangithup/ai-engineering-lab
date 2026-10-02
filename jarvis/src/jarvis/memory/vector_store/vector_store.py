@@ -1,8 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .enums import RetrievalMode
-from .models import SearchResult
+from .models import SearchRequest, SearchResult
 
 
 class VectorStore(ABC):
@@ -11,8 +10,19 @@ class VectorStore(ABC):
     def add(
         self,
         memory_id: str,
-        vector: list[float],
+        dense_vector: list[float],
+        sparse_vector: Any,
         payload: dict[str, Any],
+    ) -> None:
+        pass
+
+    @abstractmethod
+    def update(
+        self,
+        memory_id: str,
+        dense_vector: list[float] | None = None,
+        sparse_vector: Any | None = None,
+        payload: dict[str, Any] | None = None,
     ) -> None:
         pass
 
@@ -26,8 +36,6 @@ class VectorStore(ABC):
     @abstractmethod
     def search(
         self,
-        query_vector: list[float],
-        mode: RetrievalMode = RetrievalMode.DENSE,
-        limit: int = 10,
+        request: SearchRequest,
     ) -> list[SearchResult]:
         pass
