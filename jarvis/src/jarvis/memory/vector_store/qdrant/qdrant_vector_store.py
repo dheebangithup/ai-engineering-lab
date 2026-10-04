@@ -52,6 +52,8 @@ class QdrantVectorStore(VectorStore):
     # Collection
     # ------------------------------------------------------------------
 
+    def ensure_collection_exists(self) -> None:
+        self._ensure_collection()
     def _ensure_collection(self) -> None:
         if self.client.collection_exists(self.collection_name):
             return
@@ -72,6 +74,13 @@ class QdrantVectorStore(VectorStore):
                 )
             },
         )
+
+    def delete_collection(
+        self,
+        collection_name: str,
+    ) -> None:
+        if self.client.collection_exists(collection_name):
+            self.client.delete_collection(collection_name)
 
     # ------------------------------------------------------------------
     # Point ID

@@ -1,0 +1,417 @@
+corpus:
+
+  # ============================================================
+  # PAYMENT API
+  # ============================================================
+
+  - memory_id: runbook-payment-api-timeout
+    memory_type: runbook
+    title: Payment API Timeout Recovery
+    content: >
+      When the payment API starts timing out, first check application
+      error rates and request latency. Verify database connection pool
+      utilization and database latency. If the connection pool is
+      exhausted, identify long-running or leaked connections. After
+      correcting the issue, verify payment API latency and error rate
+      before restoring normal traffic.
+    tags:
+      - payment
+      - api
+      - timeout
+      - recovery
+
+  - memory_id: lesson-payment-connection-pool-exhaustion
+    memory_type: lesson
+    title: Payment API Connection Pool Exhaustion
+    content: >
+      Payment API timeouts were caused by database connection pool
+      exhaustion. The application created long-lived connections that
+      were not released correctly. Monitoring active connections and
+      pool utilization helped identify the issue.
+    tags:
+      - payment
+      - database
+      - connection-pool
+      - timeout
+
+  - memory_id: lesson-payment-db-latency
+    memory_type: lesson
+    title: Payment API Database Latency
+    content: >
+      Elevated database latency can cause payment API requests to
+      exceed their timeout threshold. Database query latency should
+      be checked before increasing application request timeouts.
+    tags:
+      - payment
+      - database
+      - latency
+
+  - memory_id: lesson-payment-pool-increase-not-fix
+    memory_type: lesson
+    title: Increasing Payment Connection Pool Size Was Not the Fix
+    content: >
+      Increasing the database connection pool size temporarily reduced
+      connection errors but did not resolve the underlying connection
+      leak. The leak had to be fixed before increasing pool capacity.
+    tags:
+      - payment
+      - database
+      - connection-pool
+      - leak
+
+  # ============================================================
+  # DATABASE
+  # ============================================================
+
+  - memory_id: runbook-database-connection-exhaustion
+    memory_type: runbook
+    title: Database Connection Exhaustion Recovery
+    content: >
+      When database connections are exhausted, check active connections,
+      pool utilization, connection wait time, and application connection
+      leaks. Identify long-running connections and verify that connections
+      are released correctly. After remediation, monitor pool utilization
+      and connection wait time.
+    tags:
+      - database
+      - connection-pool
+      - exhaustion
+      - recovery
+
+  - memory_id: lesson-db-connection-leak
+    memory_type: lesson
+    title: Database Connection Leak
+    content: >
+      A database connection leak can gradually exhaust the application
+      connection pool. The leak was caused by connections not being
+      closed after request processing. Connection lifecycle monitoring
+      helped identify the problem.
+    tags:
+      - database
+      - connection-leak
+      - connection-pool
+
+  - memory_id: lesson-db-pool-monitoring
+    memory_type: lesson
+    title: Database Pool Monitoring
+    content: >
+      Monitoring active connections, idle connections, pool utilization,
+      and connection wait time provides early warning of database pool
+      exhaustion.
+    tags:
+      - database
+      - monitoring
+      - connection-pool
+
+  - memory_id: lesson-db-pool-size-delays-problem
+    memory_type: lesson
+    title: Increasing Database Pool Size Can Delay Failure
+    content: >
+      Increasing the database connection pool size can delay connection
+      exhaustion but does not fix an underlying connection leak. Pool
+      capacity changes should be combined with connection lifecycle
+      investigation.
+    tags:
+      - database
+      - connection-pool
+      - leak
+
+  # ============================================================
+  # PRODUCTION DEPLOYMENT
+  # ============================================================
+
+  - memory_id: runbook-production-deployment-rollback
+    memory_type: runbook
+    title: Production Deployment Rollback
+    content: >
+      When a production deployment causes elevated errors, first verify
+      application error rate and health checks. If the deployment is
+      responsible, initiate rollback to the previous stable version.
+      After rollback, verify application health, error rate, latency,
+      and database compatibility before declaring recovery complete.
+    tags:
+      - deployment
+      - production
+      - rollback
+      - recovery
+
+  - memory_id: lesson-rollback-error-rate
+    memory_type: lesson
+    title: Rollback After Production Error Rate Increase
+    content: >
+      A production deployment caused a significant increase in HTTP 5xx
+      errors. Rolling back to the previous stable version restored the
+      application error rate. Error-rate monitoring was the primary
+      signal used to validate recovery.
+    tags:
+      - deployment
+      - rollback
+      - error-rate
+
+  - memory_id: lesson-db-migration-backward-compatibility
+    memory_type: lesson
+    title: Database Migration Backward Compatibility
+    content: >
+      Production deployments can fail during rollback when database
+      migrations are not backward compatible. Database schema changes
+      should support the previous application version when rollback
+      capability is required.
+    tags:
+      - deployment
+      - database
+      - migration
+      - rollback
+
+  - memory_id: lesson-health-check-after-rollback
+    memory_type: lesson
+    title: Health Checks After Deployment Rollback
+    content: >
+      A successful rollback should be followed by application health
+      checks, error-rate validation, latency checks, and verification
+      that critical endpoints are functioning correctly.
+    tags:
+      - deployment
+      - rollback
+      - health-check
+
+
+# ================================================================
+# QUERIES
+# ================================================================
+
+queries:
+
+  # ============================================================
+  # UNFILTERED RETRIEVAL
+  #
+  # Used by evaluate_dense.py
+  # No metadata filter.
+  # ============================================================
+
+  - query_id: payment-001
+    text: >
+      Payment API requests are timing out. What should I investigate?
+    relevant_memory_ids:
+      - runbook-payment-api-timeout
+      - lesson-payment-connection-pool-exhaustion
+      - lesson-payment-db-latency
+
+  - query_id: payment-002
+    text: >
+      What can cause payment API timeouts related to the database?
+    relevant_memory_ids:
+      - lesson-payment-connection-pool-exhaustion
+      - lesson-payment-db-latency
+      - lesson-payment-pool-increase-not-fix
+
+  - query_id: payment-003
+    text: >
+      How should I recover from a payment API timeout?
+    relevant_memory_ids:
+      - runbook-payment-api-timeout
+
+  - query_id: payment-004
+    text: >
+      Does increasing the database connection pool solve payment
+      connection problems?
+    relevant_memory_ids:
+      - lesson-payment-pool-increase-not-fix
+      - lesson-payment-connection-pool-exhaustion
+
+  - query_id: payment-005
+    text: >
+      What should I check when payment database latency is high?
+    relevant_memory_ids:
+      - lesson-payment-db-latency
+      - runbook-payment-api-timeout
+
+
+  - query_id: database-001
+    text: >
+      Database connections are exhausted. What should I check?
+    relevant_memory_ids:
+      - runbook-database-connection-exhaustion
+      - lesson-db-connection-leak
+      - lesson-db-pool-monitoring
+
+  - query_id: database-002
+    text: >
+      What causes database connection pool exhaustion?
+    relevant_memory_ids:
+      - lesson-db-connection-leak
+      - lesson-db-pool-size-delays-problem
+      - runbook-database-connection-exhaustion
+
+  - query_id: database-003
+    text: >
+      What database connection pool metrics should we monitor?
+    relevant_memory_ids:
+      - lesson-db-pool-monitoring
+      - runbook-database-connection-exhaustion
+
+  - query_id: database-004
+    text: >
+      How should I troubleshoot a database connection leak?
+    relevant_memory_ids:
+      - lesson-db-connection-leak
+      - lesson-db-pool-size-delays-problem
+
+  - query_id: database-005
+    text: >
+      What happens if we increase the database connection pool size?
+    relevant_memory_ids:
+      - lesson-db-pool-size-delays-problem
+      - lesson-db-connection-leak
+
+
+  - query_id: deployment-001
+    text: >
+      A production deployment caused elevated errors. What should I do?
+    relevant_memory_ids:
+      - runbook-production-deployment-rollback
+      - lesson-rollback-error-rate
+      - lesson-health-check-after-rollback
+
+  - query_id: deployment-002
+    text: >
+      What should I verify after rolling back a production deployment?
+    relevant_memory_ids:
+      - runbook-production-deployment-rollback
+      - lesson-health-check-after-rollback
+
+  - query_id: deployment-003
+    text: >
+      Why can database migrations cause rollback problems?
+    relevant_memory_ids:
+      - lesson-db-migration-backward-compatibility
+      - runbook-production-deployment-rollback
+
+  - query_id: deployment-004
+    text: >
+      What signals indicate that a production rollback was successful?
+    relevant_memory_ids:
+      - lesson-health-check-after-rollback
+      - lesson-rollback-error-rate
+      - runbook-production-deployment-rollback
+
+  - query_id: deployment-005
+    text: >
+      What happens to error rates after a production rollback?
+    relevant_memory_ids:
+      - lesson-rollback-error-rate
+      - lesson-health-check-after-rollback
+
+
+  # ============================================================
+  # RUNBOOK-ONLY FILTERED RETRIEVAL
+  #
+  # Used by evaluate_filtered.py
+  # ============================================================
+
+  - query_id: filtered-runbook-payment-001
+    text: >
+      What steps should I follow when the payment API starts timing out?
+    filter:
+      memory_type: runbook
+    relevant_memory_ids:
+      - runbook-payment-api-timeout
+
+  - query_id: filtered-runbook-payment-002
+    text: >
+      How do I recover from a payment API timeout?
+    filter:
+      memory_type: runbook
+    relevant_memory_ids:
+      - runbook-payment-api-timeout
+
+  - query_id: filtered-runbook-database-001
+    text: >
+      What should I do when database connections are exhausted?
+    filter:
+      memory_type: runbook
+    relevant_memory_ids:
+      - runbook-database-connection-exhaustion
+
+  - query_id: filtered-runbook-database-002
+    text: >
+      How should I troubleshoot database connection pool exhaustion?
+    filter:
+      memory_type: runbook
+    relevant_memory_ids:
+      - runbook-database-connection-exhaustion
+
+  - query_id: filtered-runbook-deployment-001
+    text: >
+      What should I do when a production deployment causes errors?
+    filter:
+      memory_type: runbook
+    relevant_memory_ids:
+      - runbook-production-deployment-rollback
+
+  - query_id: filtered-runbook-deployment-002
+    text: >
+      What are the steps for rolling back a bad production deployment?
+    filter:
+      memory_type: runbook
+    relevant_memory_ids:
+      - runbook-production-deployment-rollback
+
+
+  # ============================================================
+  # LESSON-ONLY FILTERED RETRIEVAL
+  #
+  # Used by evaluate_filtered.py
+  # ============================================================
+
+  - query_id: filtered-lesson-payment-001
+    text: >
+      What caused the payment API timeout problem?
+    filter:
+      memory_type: lesson
+    relevant_memory_ids:
+      - lesson-payment-connection-pool-exhaustion
+      - lesson-payment-db-latency
+      - lesson-payment-pool-increase-not-fix
+
+  - query_id: filtered-lesson-payment-002
+    text: >
+      What did we learn about payment database connection pools?
+    filter:
+      memory_type: lesson
+    relevant_memory_ids:
+      - lesson-payment-connection-pool-exhaustion
+      - lesson-payment-pool-increase-not-fix
+
+  - query_id: filtered-lesson-database-001
+    text: >
+      What did we learn about database connection leaks?
+    filter:
+      memory_type: lesson
+    relevant_memory_ids:
+      - lesson-db-connection-leak
+      - lesson-db-pool-size-delays-problem
+
+  - query_id: filtered-lesson-database-002
+    text: >
+      What database connection pool metrics should we monitor?
+    filter:
+      memory_type: lesson
+    relevant_memory_ids:
+      - lesson-db-pool-monitoring
+
+  - query_id: filtered-lesson-deployment-001
+    text: >
+      What did we learn from a production rollback caused by errors?
+    filter:
+      memory_type: lesson
+    relevant_memory_ids:
+      - lesson-rollback-error-rate
+      - lesson-health-check-after-rollback
+
+  - query_id: filtered-lesson-deployment-002
+    text: >
+      What did we learn about database migrations during rollback?
+    filter:
+      memory_type: lesson
+    relevant_memory_ids:
+      - lesson-db-migration-backward-compatibility

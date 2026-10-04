@@ -39,3 +39,10 @@ class VectorStore(ABC):
         request: SearchRequest,
     ) -> list[SearchResult]:
         pass
+
+    @abstractmethod
+    def delete_collection(
+        self,
+        collection_name: str,
+    ) -> None:
+        pass
