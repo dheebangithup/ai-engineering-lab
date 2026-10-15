@@ -170,3 +170,34 @@ def test_supervisor_escalates_on_fast_react_error():
     assert result["status"] == AgentStatus.RUNNING
     assert result["selected_worker"] == "reflexion"
     assert "Escalated" in result["routing_reason"]
+
+
+def test_supervisor_max_iterations_safety():
+    state: SupervisorState = {
+        "task": "Infinite loop test",
+        "conversation_history": [],
+        "status": AgentStatus.RUNNING,
+        "selected_worker": "fast_react",
+        "worker_history": [],
+        "worker_result": None,
+        "human_input_prompt": None,
+        "human_input_response": None,
+        "final_response": None,
+        "routing_reason": None,
+        "iteration": 5,
+        "max_iterations": 5,
+    }
+
+    result = supervisor_node(state)
+    assert result["status"] == AgentStatus.ERROR
+    assert "exceeded maximum iteration budget" in result["final_response"]
+
+
+def test_supervisor_unexpected_exception_safety():
+    # Pass malformed state that would cause unhandled error if not caught
+    broken_state = MagicMock()
+    broken_state.get.side_effect = RuntimeError("Simulated internal state failure")
+
+    result = supervisor_node(broken_state)
+    assert result["status"] == AgentStatus.ERROR
+    assert "Supervisor encountered an unexpected error" in result["final_response"]

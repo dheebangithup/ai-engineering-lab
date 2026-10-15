@@ -3,7 +3,10 @@ import shutil
 import subprocess
 from typing import Any, Dict, List, Optional, Set
 
-from jarvis.tools.schemas import ToolDefinition
+from jarvis.logger import get_logger
+from jarvis.tools.schemas import DefaultToolId, ToolDefinition
+
+logger = get_logger("tools.command")
 
 
 class CommandExecutionError(Exception):
@@ -15,6 +18,8 @@ class CommandNotAllowedError(CommandExecutionError):
     """Raised when an attempt is made to execute a command outside the allowlist."""
     pass
 
+
+DEFAULT_COMMAND_TIMEOUT: int = 15
 
 DEFAULT_ALLOWED_COMMANDS: Set[str] = {
     "echo",
@@ -36,7 +41,7 @@ class CommandTools:
     def __init__(
         self,
         allowed_commands: Optional[Set[str]] = None,
-        timeout: int = 15,
+        timeout: int = DEFAULT_COMMAND_TIMEOUT,
         cwd: Optional[Path | str] = None,
     ) -> None:
         self.allowed_commands = allowed_commands if allowed_commands is not None else DEFAULT_ALLOWED_COMMANDS
@@ -59,6 +64,7 @@ class CommandTools:
             raise FileNotFoundError(f"Command executable '{command_clean}' not found on system PATH.")
 
         cmd_list = [cmd_path] + (args if args is not None else [])
+        logger.info(f"Executing system command: {' '.join(cmd_list)}")
 
         try:
             completed = subprocess.run(
@@ -70,6 +76,7 @@ class CommandTools:
                 shell=False,
                 cwd=str(self.cwd) if self.cwd else None,
             )
+            logger.info(f"Command '{command_clean}' finished with exit code {completed.returncode}")
             return {
                 "command": command_clean,
                 "exit_code": completed.returncode,
@@ -78,8 +85,10 @@ class CommandTools:
                 "success": completed.returncode == 0,
             }
         except subprocess.TimeoutExpired as e:
+            logger.error(f"Command '{command_clean}' timed out after {self.timeout}s")
             raise CommandExecutionError(f"Command '{command_clean}' timed out after {self.timeout}s") from e
         except Exception as e:
+            logger.error(f"Command '{command_clean}' failed with error: {e}", exc_info=True)
             raise CommandExecutionError(f"Failed to execute command '{command_clean}': {str(e)}") from e
 
 
@@ -88,7 +97,7 @@ def create_command_tool_definition() -> ToolDefinition:
     Create tool definition for run_command.
     """
     return ToolDefinition(
-        id="run_command",
+        id=DefaultToolId.RUN_COMMAND.value,
         name="Run Command",
         description="Execute a permitted system command safely without shell expansion.",
         parameters={

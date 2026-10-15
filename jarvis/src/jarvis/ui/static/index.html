@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>J.A.R.V.I.S. Multi-Agent System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-avatar">
+            <span class="avatar-glow"></span>
+            <span class="avatar-icon">⚡</span>
+          </div>
+          <div class="brand-info">
+            <h1 class="brand-title">J.A.R.V.I.S.</h1>
+            <span class="brand-subtitle">Autonomous Multi-Agent AI</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-scrollable">
+        <!-- Architecture Hierarchy -->
+        <section class="sidebar-section">
+          <h2 class="section-title">Agent Architecture</h2>
+          <div class="architecture-grid">
+            <div class="arch-card" id="card-supervisor">
+              <div class="arch-card-header">
+                <span class="arch-dot supervisor-dot"></span>
+                <span class="arch-name">Executive Supervisor</span>
+              </div>
+              <p class="arch-desc">Routes, clarifies, approves, and synthesizes results.</p>
+            </div>
+            <div class="arch-card" id="card-direct">
+              <div class="arch-card-header">
+                <span class="arch-dot direct-dot"></span>
+                <span class="arch-name">Direct Worker</span>
+              </div>
+              <p class="arch-desc">Fast-path conversational queries & greetings (~1s).</p>
+            </div>
+            <div class="arch-card" id="card-react">
+              <div class="arch-card-header">
+                <span class="arch-dot react-dot"></span>
+                <span class="arch-name">Fast ReAct Worker</span>
+              </div>
+              <p class="arch-desc">Single-pass tool execution and inspection.</p>
+            </div>
+            <div class="arch-card" id="card-reflexion">
+              <div class="arch-card-header">
+                <span class="arch-dot reflexion-dot"></span>
+                <span class="arch-name">Reflexion Worker</span>
+              </div>
+              <p class="arch-desc">Iterative evaluate-reflect-refine coding loop.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Demo / Preset Queries -->
+        <section class="sidebar-section">
+          <h2 class="section-title">Quick Presets</h2>
+          <div class="preset-list">
+            <button class="preset-btn" data-query="hi">
+              <span class="preset-icon">👋</span>
+              <span class="preset-text">Greeting (Direct Fast-Path)</span>
+            </button>
+            <button class="preset-btn" data-query="Inspect the workspace files and list their contents.">
+              <span class="preset-icon">📂</span>
+              <span class="preset-text">Inspect Workspace (Fast ReAct)</span>
+            </button>
+            <button class="preset-btn" data-query="Write a python function in solution.py that computes Fibonacci numbers and run a test to verify it.">
+              <span class="preset-icon">🔄</span>
+              <span class="preset-text">Fibonacci Code & Test (Reflexion)</span>
+            </button>
+            <button class="preset-btn" data-query="Clean up something">
+              <span class="preset-icon">❓</span>
+              <span class="preset-text">Ambiguous Request (HITL Prompt)</span>
+            </button>
+          </div>
+        </section>
+
+        <!-- Workspace Explorer -->
+        <section class="sidebar-section">
+          <div class="section-header-flex">
+            <h2 class="section-title">Workspace Sandbox</h2>
+            <button id="refresh-workspace-btn" class="icon-btn" title="Refresh files">↻</button>
+          </div>
+          <div id="workspace-file-list" class="workspace-file-list">
+            <div class="loading-placeholder">Loading workspace files...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Sidebar Footer -->
+      <div class="sidebar-footer">
+        <div class="system-status-indicator">
+          <span class="status-pulse"></span>
+          <span>System Active</span>
+        </div>
+        <span class="version-tag">v2.0 FastAPI</span>
+      </div>
+    </aside>
+
+    <!-- Main Chat Content -->
+    <main class="main-content">
+      <!-- Top Navigation Bar -->
+      <header class="topbar">
+        <div class="topbar-left">
+          <div class="active-badge">
+            <span class="pulse-dot"></span>
+            <span>Supervisor Ready</span>
+          </div>
+          <div class="workspace-pill" id="workspace-root-display" title="Active Workspace Directory">
+            📁 jarvis/workspace
+          </div>
+        </div>
+        <div class="topbar-right">
+          <button id="view-logs-btn" class="btn btn-outline" title="View live application logs">
+            <span class="btn-icon">📜</span> App Logs
+          </button>
+          <button id="clear-chat-btn" class="btn btn-outline" title="Clear current session messages">
+            <span class="btn-icon">🗑️</span> Clear Chat
+          </button>
+        </div>
+      </header>
+
+      <!-- Messages Stream -->
+      <div class="chat-container" id="chat-container">
+        <!-- Welcome Card -->
+        <div class="welcome-card" id="welcome-card">
+          <div class="welcome-icon">🤖</div>
+          <h2 class="welcome-title">Good day. I am J.A.R.V.I.S.</h2>
+          <p class="welcome-desc">
+            Your autonomous multi-agent engineering assistant. Powered by an Executive Supervisor, Direct fast-paths, ReAct tooling, and a multi-iteration Reflexion loop with Human-in-the-Loop clarification.
+          </p>
+          <div class="quick-chips">
+            <span class="chip-label">Try asking:</span>
+            <button class="quick-chip" data-query="hi">"hi"</button>
+            <button class="quick-chip" data-query="What tools and files are available in this workspace?">"List workspace files"</button>
+            <button class="quick-chip" data-query="Write a python script that tests prime number generation.">"Prime number test"</button>
+          </div>
+        </div>
+
+        <!-- Chat messages will be injected here -->
+        <div id="messages-list" class="messages-list"></div>
+      </div>
+
+      <!-- Human-In-The-Loop Clarification Floating / Docked Card (hidden by default) -->
+      <div id="hitl-container" class="hitl-banner hidden">
+        <div class="hitl-card">
+          <div class="hitl-header">
+            <div class="hitl-title-row">
+              <span class="hitl-badge">HUMAN-IN-THE-LOOP REQUIRED</span>
+              <span class="hitl-subtitle">Clarification needed by Executive Supervisor</span>
+            </div>
+            <button id="hitl-dismiss-btn" class="hitl-close-btn" title="Dismiss clarification">✕</button>
+          </div>
+          <p id="hitl-question" class="hitl-question-text"></p>
+          <div class="hitl-input-row">
+            <input type="text" id="hitl-input" class="hitl-input" placeholder="Type your response or clarification here..." autocomplete="off">
+            <button id="hitl-submit-btn" class="btn btn-primary hitl-send-btn">
+              <span>Submit Clarification</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <footer class="input-bar-container">
+        <form id="chat-form" class="chat-form">
+          <div class="input-wrapper">
+            <textarea
+              id="chat-input"
+              class="chat-input"
+              placeholder="Ask J.A.R.V.I.S. a task, query, or coding problem..."
+              rows="1"
+              autofocus
+            ></textarea>
+            <button type="submit" id="send-btn" class="send-btn" title="Send (Enter)">
+              <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </div>
+          <div class="input-hint">
+            <span>Press <kbd>Enter</kbd> to send, <kbd>Shift+Enter</kbd> for new line</span>
+          </div>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <!-- Live Logs Modal -->
+  <div id="logs-modal" class="logs-modal hidden">
+    <div class="logs-modal-backdrop" id="logs-modal-backdrop"></div>
+    <div class="logs-modal-content">
+      <div class="logs-modal-header">
+        <div class="logs-modal-title">
+          <span class="logs-indicator-dot"></span>
+          <h3>Application Logs <span class="logs-file-pill">workspace/logs/app.log</span></h3>
+        </div>
+        <div class="logs-modal-actions">
+          <button id="refresh-logs-btn" class="btn btn-outline" style="padding: 2px 10px; font-size: 0.76rem;">↻ Refresh</button>
+          <button id="close-logs-btn" class="icon-btn" style="font-size: 1.1rem;" title="Close">✕</button>
+        </div>
+      </div>
+      <div class="logs-viewer-body">
+        <pre id="logs-content" class="logs-pre">Loading logs...</pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -7,13 +7,20 @@ from langgraph.prebuilt import create_react_agent
 
 from jarvis.agent.llm import chat_llm
 from jarvis.agent.reflexion.state import ReflexionState
+from jarvis.logger import get_logger
 from jarvis.tools import (
+    DEFAULT_ALLOWED_COMMANDS,
     ToolRegistry,
     ToolsGateway,
+    TraceEventType,
     create_gateway_tools,
     register_default_tools,
 )
 from jarvis.workspace import default_workspace
+
+logger = get_logger("reflexion.executor")
+
+DEFAULT_OUTPUT_TRUNCATE_LIMIT: int = 2000
 
 
 class ExecutionTraceHandler(BaseCallbackHandler):
@@ -27,7 +34,7 @@ class ExecutionTraceHandler(BaseCallbackHandler):
         parent_run_id: Any = None, **kwargs: Any
     ) -> None:
         self.events.append({
-            "event_type": "tool_started",
+            "event_type": TraceEventType.TOOL_STARTED.value,
             "tool": serialized.get("name", "unknown"),
             "run_id": str(run_id),
         })
@@ -37,9 +44,9 @@ class ExecutionTraceHandler(BaseCallbackHandler):
         parent_run_id: Any = None, **kwargs: Any
     ) -> None:
         self.events.append({
-            "event_type": "tool_completed",
+            "event_type": TraceEventType.TOOL_COMPLETED.value,
             "run_id": str(run_id),
-            "output": str(output)[:2000],
+            "output": str(output)[:DEFAULT_OUTPUT_TRUNCATE_LIMIT],
         })
 
     def on_tool_error(
@@ -47,7 +54,7 @@ class ExecutionTraceHandler(BaseCallbackHandler):
         parent_run_id: Any = None, **kwargs: Any
     ) -> None:
         self.events.append({
-            "event_type": "tool_error",
+            "event_type": TraceEventType.TOOL_ERROR.value,
             "run_id": str(run_id),
             "error": str(error),
         })
@@ -62,7 +69,7 @@ _registry = ToolRegistry()
 register_default_tools(
     _registry,
     allowed_base_dir=WORKSPACE_DIR,
-    allowed_commands={"python", "python3", "echo", "date", "whoami", "pwd", "ls", "git"},
+    allowed_commands=DEFAULT_ALLOWED_COMMANDS,
 )
 _gateway = ToolsGateway(_registry)
 
@@ -92,13 +99,18 @@ executor_agent = create_react_agent(
 )
 
 
+DEFAULT_EXECUTOR_RECURSION_LIMIT: int = 25
+
+
 def executor_node(state: ReflexionState) -> dict:
     """
     Executes the current plan using the ReAct agent powered by ToolsGateway.
+    Safely captures tool execution events and runtime errors.
     """
-    task = state["task"]
-    plan = state["plan"]
+    task = state.get("task", "")
+    plan = state.get("plan", "")
     trace = ExecutionTraceHandler()
+    logger.info(f"Reflexion executor executing plan for task: '{task[:60]}'")
 
     prompt = f"""Execute the following task according to the plan.
 
@@ -112,23 +124,28 @@ Actually execute the plan using your tools and verify the result.
 Return only the execution outcome and relevant results.
 """
 
-    result = executor_agent.invoke(
-        {"messages": [{"role": "user", "content": prompt}]},
-        config={"callbacks": [trace]},
-    )
+    try:
+        result = executor_agent.invoke(
+            {"messages": [{"role": "user", "content": prompt}]},
+            config={"callbacks": [trace], "recursion_limit": DEFAULT_EXECUTOR_RECURSION_LIMIT},
+        )
 
-    print("\n========== AGENT EXECUTION TRACE ==========")
-    for message in result.get("messages", []):
-        msg_type = type(message).__name__
-        print(f"\n[{msg_type}]")
-        if getattr(message, "content", None):
-            print("CONTENT:", message.content)
-        if getattr(message, "tool_calls", None):
-            print("TOOL CALLS:", message.tool_calls)
-    print("\n========== END TRACE ==========\n")
-
-    last_message = result["messages"][-1]
-    outcome_content = last_message.content if hasattr(last_message, "content") else str(last_message)
+        messages = result.get("messages", []) if isinstance(result, dict) else []
+        if messages:
+            last_message = messages[-1]
+            outcome_content = last_message.content if hasattr(last_message, "content") else str(last_message)
+            if not isinstance(outcome_content, str):
+                outcome_content = str(outcome_content)
+        else:
+            outcome_content = "Executor completed without generating message content."
+        logger.info(f"Reflexion executor finished with {len(trace.events)} tool event(s)")
+    except Exception as e:
+        logger.error(f"Reflexion executor encountered an error: {e}", exc_info=True)
+        outcome_content = f"Execution error: {str(e)}"
+        trace.events.append({
+            "event_type": TraceEventType.EXECUTOR_ERROR.value,
+            "error": str(e),
+        })
 
     return {
         "execution_outcome": outcome_content,

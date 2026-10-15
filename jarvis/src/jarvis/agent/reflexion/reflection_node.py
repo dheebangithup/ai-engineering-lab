@@ -1,7 +1,10 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 from jarvis.agent.llm import chat_llm
-from jarvis.agent.reflexion.state import ReflexionState
+from jarvis.agent.reflexion.state import EvaluationVerdict, ReflexionState
+from jarvis.logger import get_logger
+
+logger = get_logger("reflexion.reflection")
 
 SYSTEM_PROMPT = ChatPromptTemplate.from_messages([
     (
@@ -76,22 +79,60 @@ A concise, actionable lesson for future planning.
 
 
 def reflection_node(state: ReflexionState) -> dict:
-    evaluation = state["evaluation"]
+    evaluation = state.get("evaluation") if isinstance(state, dict) else None
+    if evaluation:
+        if isinstance(evaluation, dict):
+            verdict = evaluation.get("verdict", EvaluationVerdict.FAILURE.value)
+            analysis = evaluation.get("analysis", "")
+            reason = evaluation.get("reason", "")
+            has_reusable_lesson = evaluation.get("has_reusable_lesson", False)
+            learning_reason = evaluation.get("learning_reason", "")
+        else:
+            verdict = getattr(evaluation, "verdict", EvaluationVerdict.FAILURE.value)
+            analysis = getattr(evaluation, "analysis", "")
+            reason = getattr(evaluation, "reason", "")
+            has_reusable_lesson = getattr(evaluation, "has_reusable_lesson", False)
+            learning_reason = getattr(evaluation, "learning_reason", "")
+    else:
+        verdict = EvaluationVerdict.FAILURE.value
+        analysis = "No evaluation available."
+        reason = "Missing evaluation state."
+        has_reusable_lesson = False
+        learning_reason = ""
 
-    response = chat_llm.invoke(
-        SYSTEM_PROMPT.format(
-            task=state["task"],
-            plan=state["plan"],
-            execution_outcome=state["execution_outcome"],
-            verdict=evaluation.verdict,
-            analysis=evaluation.analysis,
-            reason=evaluation.reason,
-            has_reusable_lesson=evaluation.has_reusable_lesson,
-            learning_reason=evaluation.learning_reason,
+    task = state.get("task", "") if isinstance(state, dict) else ""
+    plan = state.get("plan", "") if isinstance(state, dict) else ""
+    outcome = state.get("execution_outcome", "") if isinstance(state, dict) else ""
+
+    logger.info(f"Reflexion reflection node generating feedback (verdict={verdict})...")
+
+    try:
+        response = chat_llm.invoke(
+            SYSTEM_PROMPT.format(
+                task=task,
+                plan=plan,
+                execution_outcome=outcome,
+                verdict=verdict,
+                analysis=analysis,
+                reason=reason,
+                has_reusable_lesson=has_reusable_lesson,
+                learning_reason=learning_reason,
+            )
         )
-    )
-
-    reflection_text = response.content
+        reflection_text = response.content if hasattr(response, "content") else str(response)
+        logger.info("Reflexion reflection feedback recorded to memory.")
+    except Exception as e:
+        logger.error(f"Reflexion reflection failed: {e}. Using fallback reflection feedback.", exc_info=True)
+        reflection_text = (
+            f"<diagnostic_analysis>\n"
+            f"What happened: Prior trial evaluation verdict was {verdict}.\n"
+            f"Why it happened: {reason or 'Execution encountered unexpected issues.'}\n"
+            f"Recommended adjustment: Simplify actions and verify tool outputs step-by-step.\n"
+            f"</diagnostic_analysis>\n"
+            f"<reflection>\n"
+            f"Avoid repeating previous errors. Prioritize direct, robust tool operations.\n"
+            f"</reflection>"
+        )
 
     return {
         "reflection": reflection_text,

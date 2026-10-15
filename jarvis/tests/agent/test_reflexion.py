@@ -117,3 +117,69 @@ def test_create_reflexion_graph():
     assert "evaluator_node" in node_keys
     assert "reflection_node" in node_keys
     assert "answer_node" in node_keys
+
+
+def test_route_after_evaluation_dict_state():
+    state_dict = {
+        "evaluation": {
+            "verdict": "SUCCESS",
+            "has_reusable_lesson": False,
+        },
+        "trial_number": 1,
+        "max_trials": 3,
+    }
+    assert route_after_evaluation(state_dict) == "finish"
+
+    state_dict_retry = {
+        "evaluation": {
+            "verdict": "FAILURE",
+            "has_reusable_lesson": False,
+        },
+        "trial_number": 1,
+        "max_trials": 3,
+    }
+    assert route_after_evaluation(state_dict_retry) == "reflect_failure"
+
+
+def test_reflexion_nodes_llm_exception_tolerance():
+    from unittest.mock import MagicMock, patch
+    from jarvis.agent.reflexion.planner_node import planner_node
+    from jarvis.agent.reflexion.evaluator_node import evaluator_node
+    from jarvis.agent.reflexion.reflection_node import reflection_node
+    from jarvis.agent.reflexion.answer_node import answer_node
+
+    state = {
+        "task": "Test task",
+        "plan": "",
+        "execution_outcome": "Some error occurred",
+        "execution_events": [],
+        "reflexion_memeory": [],
+        "trial_number": 1,
+        "max_trials": 3,
+    }
+
+    mock_llm = MagicMock()
+    mock_llm.invoke.side_effect = RuntimeError("Planner LLM failed")
+    with patch("jarvis.agent.reflexion.planner_node.chat_llm", mock_llm):
+        p_res = planner_node(state)
+        assert "<plan>" in p_res["plan"]
+
+    mock_llm_eval = MagicMock()
+    mock_llm_eval.with_structured_output.side_effect = RuntimeError("Structured LLM failed")
+    with patch("jarvis.agent.reflexion.evaluator_node.chat_llm", mock_llm_eval):
+        e_res = evaluator_node(state)
+        assert e_res["evaluation"].verdict == "FAILURE"
+
+    state["evaluation"] = e_res["evaluation"]
+    mock_llm_ref = MagicMock()
+    mock_llm_ref.invoke.side_effect = RuntimeError("Reflection LLM failed")
+    with patch("jarvis.agent.reflexion.reflection_node.chat_llm", mock_llm_ref):
+        r_res = reflection_node(state)
+        assert "<reflection>" in r_res["reflection"]
+
+    mock_llm_ans = MagicMock()
+    mock_llm_ans.invoke.side_effect = RuntimeError("Answer LLM failed")
+    with patch("jarvis.agent.reflexion.answer_node.chat_llm", mock_llm_ans):
+        a_res = answer_node(state)
+        assert "<final_answer>" in a_res["reflection"]
+

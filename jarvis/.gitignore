@@ -16,3 +16,8 @@ data/
 .env
 *.env
 
+# Runtime workspace and logs
+workspace/
+logs/
+*.log
+

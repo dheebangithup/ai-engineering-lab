@@ -1,7 +1,13 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from jarvis.tools.schemas import ToolDefinition
+from jarvis.logger import get_logger
+from jarvis.tools.schemas import DefaultToolId, ToolDefinition
+
+logger = get_logger("tools.fs")
+
+DEFAULT_FILE_ENCODING: str = "utf-8"
+DEFAULT_SEARCH_START_DIR: str = "."
 
 
 class PathTraversalError(PermissionError):
@@ -40,6 +46,7 @@ class FileSystemTools:
         """
         List files in an allowed directory.
         """
+        logger.info(f"FileSystemTools listing files in: '{directory}' (recursive={recursive})")
         target_dir = self._resolve_safe_path(directory)
         if not target_dir.exists():
             raise FileNotFoundError(f"Directory not found: '{directory}'")
@@ -69,6 +76,7 @@ class FileSystemTools:
         Read text content of a file from the allowed directory.
         """
         safe_path = self._resolve_safe_path(file_path)
+        logger.info(f"FileSystemTools reading file: '{safe_path}'")
         if not safe_path.exists():
             raise FileNotFoundError(f"File not found: '{file_path}'")
         if not safe_path.is_file():
@@ -82,6 +90,7 @@ class FileSystemTools:
         Creates parent directories if necessary.
         """
         safe_path = self._resolve_safe_path(file_path)
+        logger.info(f"FileSystemTools writing file: '{safe_path}' ({len(content)} characters)")
         safe_path.parent.mkdir(parents=True, exist_ok=True)
         safe_path.write_text(content, encoding="utf-8")
         return {
@@ -94,6 +103,7 @@ class FileSystemTools:
         """
         Search files in the allowed directory for a text pattern.
         """
+        logger.info(f"FileSystemTools searching pattern '{pattern}' in '{directory}'")
         target_dir = self._resolve_safe_path(directory)
         if not target_dir.exists():
             raise FileNotFoundError(f"Directory not found: '{directory}'")
@@ -125,8 +135,8 @@ def create_filesystem_tool_definitions() -> Dict[str, ToolDefinition]:
     Create tool definitions for the filesystem tools.
     """
     return {
-        "list_files": ToolDefinition(
-            id="list_files",
+        DefaultToolId.LIST_FILES.value: ToolDefinition(
+            id=DefaultToolId.LIST_FILES.value,
             name="List Files",
             description="List files and directories within an allowed workspace directory.",
             parameters={
@@ -144,8 +154,8 @@ def create_filesystem_tool_definitions() -> Dict[str, ToolDefinition]:
                 "required": [],
             },
         ),
-        "read_file": ToolDefinition(
-            id="read_file",
+        DefaultToolId.READ_FILE.value: ToolDefinition(
+            id=DefaultToolId.READ_FILE.value,
             name="Read File",
             description="Read the complete text content of a specified file.",
             parameters={
@@ -159,8 +169,8 @@ def create_filesystem_tool_definitions() -> Dict[str, ToolDefinition]:
                 "required": ["file_path"],
             },
         ),
-        "write_file": ToolDefinition(
-            id="write_file",
+        DefaultToolId.WRITE_FILE.value: ToolDefinition(
+            id=DefaultToolId.WRITE_FILE.value,
             name="Write File",
             description="Write text content to a file in the allowed workspace directory.",
             parameters={
@@ -178,8 +188,8 @@ def create_filesystem_tool_definitions() -> Dict[str, ToolDefinition]:
                 "required": ["file_path", "content"],
             },
         ),
-        "search_files": ToolDefinition(
-            id="search_files",
+        DefaultToolId.SEARCH_FILES.value: ToolDefinition(
+            id=DefaultToolId.SEARCH_FILES.value,
             name="Search Files",
             description="Search files in the allowed workspace directory for a specific text pattern or keyword.",
             parameters={

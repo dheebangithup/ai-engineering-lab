@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+from jarvis.logger import get_logger
 from jarvis.memory.embedding_engine import EmbeddingProvider
 from jarvis.memory.file_store import FileMemoryStore
 from jarvis.memory.models import (
@@ -8,6 +9,8 @@ from jarvis.memory.models import (
 )
 from jarvis.memory.vector_store import VectorStore
 from jarvis.memory.vector_store.sparse_encoder import SparseEncoder
+
+logger = get_logger("memory.manager")
 
 
 class MemoryManager:
@@ -28,6 +31,7 @@ class MemoryManager:
     # ------------------------------------------------------------------
 
     def add(self, memory: Memory) -> Memory:
+        logger.info(f"Adding memory: id='{memory.memory_id}', title='{memory.title}', type='{memory.memory_type}'")
         if self._store.exists(memory.memory_id):
             raise ValueError(
                 f"Memory already exists: {memory.memory_id}"
@@ -43,6 +47,7 @@ class MemoryManager:
 
         # Add to retrieval index.
         self._index_memory(memory)
+        logger.info(f"Memory successfully indexed and saved: id='{memory.memory_id}'")
 
         return memory
 
@@ -58,10 +63,12 @@ class MemoryManager:
     # ------------------------------------------------------------------
 
     def delete(self, memory_id: str) -> None:
+        logger.info(f"Deleting memory: id='{memory_id}'")
         self._require_memory(memory_id)
 
         self._store.delete(memory_id)
         self._delete_from_index(memory_id)
+        logger.info(f"Memory deleted: id='{memory_id}'")
 
     # ------------------------------------------------------------------
     # REINFORCE

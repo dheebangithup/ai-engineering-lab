@@ -7,6 +7,13 @@ from spacy.lang.en.stop_words import STOP_WORDS as DEFAULT_STOP_WORDS
 from jarvis.tools.schemas import ToolDefinition
 from jarvis.tools.tool_registry import ToolRegistry
 
+DEFAULT_BM25_K1: float = 1.5
+DEFAULT_BM25_B: float = 0.75
+DEFAULT_BM25_EPSILON: float = 0.25
+DEFAULT_MAX_DISCOVERY_RESULTS: int = 5
+ID_TOKEN_BOOST: int = 3
+NAME_TOKEN_BOOST: int = 2
+
 
 def tokenize(text: str, stop_words: Optional[Set[str]] = None) -> List[str]:
     """
@@ -28,9 +35,9 @@ class ToolDiscovery:
     def __init__(
         self,
         registry: ToolRegistry,
-        k1: float = 1.5,
-        b: float = 0.75,
-        epsilon: float = 0.25,
+        k1: float = DEFAULT_BM25_K1,
+        b: float = DEFAULT_BM25_B,
+        epsilon: float = DEFAULT_BM25_EPSILON,
         stop_words: Optional[Set[str]] = None,
     ) -> None:
         self._registry = registry
@@ -48,13 +55,13 @@ class ToolDiscovery:
         name_tokens = tokenize(tool_def.name, self._stop_words)
         desc_tokens = tokenize(tool_def.description, self._stop_words)
 
-        tokens = id_tokens * 3 + name_tokens * 2 + desc_tokens
+        tokens = id_tokens * ID_TOKEN_BOOST + name_tokens * NAME_TOKEN_BOOST + desc_tokens
         return tokens if tokens else ["tool"]
 
     def discover(
         self,
         query: str,
-        max_results: int = 5,
+        max_results: int = DEFAULT_MAX_DISCOVERY_RESULTS,
     ) -> List[ToolDefinition]:
         """
         Find relevant tools matching the natural-language query using BM25Okapi.

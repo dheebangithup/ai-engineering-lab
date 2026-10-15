@@ -1,7 +1,12 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 from jarvis.agent.llm import chat_llm
-from jarvis.agent.reflexion.state import EvaluatorState, ReflexionState
+from jarvis.agent.reflexion.state import EvaluationVerdict, EvaluatorState, ReflexionState
+from jarvis.logger import get_logger
+
+logger = get_logger("reflexion.evaluator")
+
+FAILURE_INDICATOR_KEYWORDS = frozenset({"error", "failed", "failure", "exception", "traceback"})
 
 SYSTEM_PROMPT = ChatPromptTemplate.from_messages([
     (
@@ -32,17 +37,48 @@ Evaluate the task and learning opportunity independently.
 
 
 def evaluator_node(state: ReflexionState) -> dict:
-    evaluator_llm = chat_llm.with_structured_output(EvaluatorState)
+    logger.info("Reflexion evaluator assessing task outcome...")
+    task = state.get("task", "")
+    plan = state.get("plan", "")
+    outcome = state.get("execution_outcome", "")
+    events = state.get("execution_events", []) or []
 
-    prompt = SYSTEM_PROMPT.invoke({
-        "task": state["task"],
-        "plan": state["plan"],
-        "execution_outcome": state["execution_outcome"],
-        "execution_events": state.get("execution_events", []),
-    })
+    try:
+        evaluator_llm = chat_llm.with_structured_output(EvaluatorState)
 
-    response = evaluator_llm.invoke(prompt)
+        prompt = SYSTEM_PROMPT.invoke({
+            "task": task,
+            "plan": plan,
+            "execution_outcome": outcome,
+            "execution_events": events,
+        })
+
+        response = evaluator_llm.invoke(prompt)
+        if isinstance(response, EvaluatorState):
+            eval_result = response
+        elif isinstance(response, dict):
+            eval_result = EvaluatorState(**response)
+        else:
+            raise ValueError(f"Unexpected evaluator response type: {type(response)}")
+
+    except Exception as e:
+        logger.warning(
+            f"Reflexion evaluator structured call failed: {e}. Executing heuristic evaluation fallback.",
+            exc_info=True,
+        )
+        outcome_lower = str(outcome).lower()
+        is_failure = any(w in outcome_lower for w in FAILURE_INDICATOR_KEYWORDS) or not str(outcome).strip()
+        eval_result = EvaluatorState(
+            verdict=EvaluationVerdict.FAILURE.value if is_failure else EvaluationVerdict.SUCCESS.value,
+            analysis=f"Heuristic fallback: outcome is {'failed' if is_failure else 'successful'}.",
+            reason=f"Heuristic assessment following LLM evaluation failure: {str(e)}",
+            has_reusable_lesson=is_failure,
+            learning_reason="Investigate execution logs for errors." if is_failure else "No reusable lesson.",
+        )
+
+    verdict = eval_result.verdict
+    logger.info(f"Reflexion evaluation verdict: {verdict}. Reason: {eval_result.reason}")
 
     return {
-        "evaluation": response,
+        "evaluation": eval_result,
     }

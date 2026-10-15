@@ -1,7 +1,12 @@
 from jarvis.agent.reflexion import create_reflexion_graph
+from jarvis.agent.reflexion.state import EvaluationVerdict
 from jarvis.agent.supervisor.state import AgentStatus, SupervisorState, WorkerResult, WorkerType
+from jarvis.logger import get_logger
+from jarvis.tools import HUMAN_INPUT_INDICATOR
 
+logger = get_logger("worker.reflexion")
 
+DEFAULT_MAX_TRIALS: int = 3
 _reflexion_graph = None
 
 
@@ -18,38 +23,55 @@ def reflexion_worker(state: SupervisorState) -> dict:
     Uses planning, execution with ToolsGateway, evaluation, and reflection loops.
     Reports outcome, errors, or human input requests back to the supervisor.
     """
-    task = state["task"]
-    graph = get_reflexion_graph()
-
-    initial_reflexion_state = {
-        "task": task.strip(),
-        "plan": "",
-        "execution_outcome": "",
-        "evaluation": {
-            "analysis": "",
-            "verdict": "FAILURE",
-            "reason": "",
-            "has_reusable_lesson": False,
-            "learning_reason": "",
-        },
-        "reflection": "",
-        "reflexion_memeory": [],
-        "execution_events": [],
-        "trial_number": 0,
-        "max_trials": 3,
-        "messages": [],
-    }
+    task = state.get("task", "")
+    logger.info(f"Reflexion worker invoked for task: '{task[:60]}'")
 
     try:
-        final_state = graph.invoke(initial_reflexion_state)
-        outcome = final_state.get("execution_outcome", "")
-        evaluation = final_state.get("evaluation")
-        verdict = getattr(evaluation, "verdict", "FAILURE") if evaluation else "FAILURE"
-        is_success = verdict == "SUCCESS"
-        events = final_state.get("execution_events", [])
+        graph = get_reflexion_graph()
 
-        if "NEED_HUMAN_INPUT:" in outcome:
-            prompt = outcome.split("NEED_HUMAN_INPUT:", 1)[1].strip()
+        initial_reflexion_state = {
+            "task": task.strip(),
+            "plan": "",
+            "execution_outcome": "",
+            "evaluation": {
+                "analysis": "",
+                "verdict": EvaluationVerdict.FAILURE.value,
+                "reason": "",
+                "has_reusable_lesson": False,
+                "learning_reason": "",
+            },
+            "reflection": "",
+            "reflexion_memeory": [],
+            "execution_events": [],
+            "trial_number": 0,
+            "max_trials": DEFAULT_MAX_TRIALS,
+            "messages": [],
+        }
+
+        final_state = graph.invoke(initial_reflexion_state)
+        outcome = final_state.get("execution_outcome", "") or ""
+        evaluation = final_state.get("evaluation")
+
+        if evaluation:
+            if hasattr(evaluation, "verdict"):
+                verdict = evaluation.verdict
+                reason = getattr(evaluation, "reason", "Task could not be verified successfully.")
+            elif isinstance(evaluation, dict):
+                verdict = evaluation.get("verdict", EvaluationVerdict.FAILURE.value)
+                reason = evaluation.get("reason", "Task could not be verified successfully.")
+            else:
+                verdict = EvaluationVerdict.FAILURE.value
+                reason = "Unknown evaluation structure."
+        else:
+            verdict = EvaluationVerdict.FAILURE.value
+            reason = "No evaluation returned."
+
+        is_success = verdict == EvaluationVerdict.SUCCESS.value
+        events = final_state.get("execution_events", []) or []
+
+        if HUMAN_INPUT_INDICATOR in outcome:
+            prompt = outcome.split(HUMAN_INPUT_INDICATOR, 1)[1].strip()
+            logger.info(f"Reflexion worker requested human input: {prompt}")
             worker_res = WorkerResult(
                 worker=WorkerType.REFLEXION.value,
                 status=AgentStatus.NEED_HUMAN_INPUT,
@@ -59,6 +81,7 @@ def reflexion_worker(state: SupervisorState) -> dict:
                 events=events,
             )
         elif is_success:
+            logger.info(f"Reflexion worker completed successfully: verdict={verdict}")
             worker_res = WorkerResult(
                 worker=WorkerType.REFLEXION.value,
                 status=AgentStatus.COMPLETED,
@@ -66,7 +89,7 @@ def reflexion_worker(state: SupervisorState) -> dict:
                 events=events,
             )
         else:
-            reason = getattr(evaluation, "reason", "Task could not be verified successfully.")
+            logger.warning(f"Reflexion worker evaluated to failure: {reason}")
             worker_res = WorkerResult(
                 worker=WorkerType.REFLEXION.value,
                 status=AgentStatus.ERROR,
@@ -75,6 +98,7 @@ def reflexion_worker(state: SupervisorState) -> dict:
                 events=events,
             )
     except Exception as e:
+        logger.error(f"Reflexion worker crashed with exception: {e}", exc_info=True)
         worker_res = WorkerResult(
             worker=WorkerType.REFLEXION.value,
             status=AgentStatus.ERROR,

@@ -82,3 +82,19 @@ Run the test suite with pytest:
 # Run tool suite tests
 uv run pytest tests/tools/ -v
 ```
+
+## Running the Web Application
+
+Launch the modern HTML/CSS/JS web interface:
+
+```bash
+uv run python app.py
+```
+
+Or run uvicorn with module resolution:
+
+```bash
+uv run python -m uvicorn jarvis.ui.server:app --app-dir src --host 0.0.0.0 --port 8000 --reload
+```
+
+Open your browser at **http://localhost:8000**.

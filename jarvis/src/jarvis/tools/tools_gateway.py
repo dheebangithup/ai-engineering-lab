@@ -1,8 +1,11 @@
 import traceback
 from typing import Any, Dict, List, Optional
 
+from jarvis.logger import get_logger
 from jarvis.tools.schemas import ToolDefinition, ToolResult
 from jarvis.tools.tool_registry import ToolNotFoundError, ToolRegistry
+
+logger = get_logger("tools.gateway")
 
 
 class ValidationError(Exception):
@@ -87,11 +90,14 @@ class ToolsGateway:
         if arguments is None:
             arguments = {}
 
+        logger.info(f"Gateway executing tool: '{tool_id}' with args: {arguments}")
+
         # 1. Resolve tool definition and implementation
         try:
             tool_def = self._registry.get_definition(tool_id)
             implementation = self._registry.get_implementation(tool_id)
         except ToolNotFoundError as e:
+            logger.error(f"Tool '{tool_id}' resolution error: {e}")
             return ToolResult(
                 tool_id=tool_id,
                 success=False,
@@ -102,6 +108,7 @@ class ToolsGateway:
         try:
             validate_arguments(tool_def.parameters, arguments)
         except ValidationError as e:
+            logger.warning(f"Tool '{tool_id}' validation error: {e}")
             return ToolResult(
                 tool_id=tool_id,
                 success=False,
@@ -113,14 +120,17 @@ class ToolsGateway:
             raw_result = implementation(**arguments)
 
             if isinstance(raw_result, ToolResult):
+                logger.info(f"Tool '{tool_id}' completed: success={raw_result.success}")
                 return raw_result
 
+            logger.info(f"Tool '{tool_id}' completed successfully")
             return ToolResult(
                 tool_id=tool_id,
                 success=True,
                 data=raw_result,
             )
         except Exception as e:
+            logger.error(f"Tool '{tool_id}' raised exception: {e}", exc_info=True)
             return ToolResult(
                 tool_id=tool_id,
                 success=False,

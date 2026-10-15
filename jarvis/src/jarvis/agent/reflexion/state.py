@@ -1,13 +1,34 @@
+from enum import Enum
 import operator
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Literal, TypedDict, Union
 
 from langchain_core.messages import BaseMessage
 from langgraph.graph import add_messages
 from pydantic import BaseModel, Field
 
 
+class EvaluationVerdict(str, Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+
+
+class ReflexionNode(str, Enum):
+    PLANNER = "planner_node"
+    EXECUTOR = "executor_node"
+    EVALUATOR = "evaluator_node"
+    REFLECTION = "reflection_node"
+    ANSWER = "answer_node"
+
+
+class ReflexionRoute(str, Enum):
+    FINISH = "finish"
+    REFLECT_SUCCESS = "reflect_success"
+    REFLECT_FAILURE = "reflect_failure"
+    RETRY = "retry"
+
+
 class EvaluatorState(BaseModel):
-    verdict: Literal["SUCCESS", "FAILURE"]
+    verdict: Union[EvaluationVerdict, Literal["SUCCESS", "FAILURE"]]
 
     analysis: str = Field(
         description="Point-by-point analysis of the execution outcome "

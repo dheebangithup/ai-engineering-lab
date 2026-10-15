@@ -19,6 +19,14 @@ class WorkerType(str, Enum):
     REFLEXION = "reflexion"
 
 
+class SupervisorNodeName(str, Enum):
+    SUPERVISOR = "supervisor"
+    DIRECT_WORKER = "direct_worker"
+    FAST_REACT_WORKER = "fast_react_worker"
+    REFLEXION_WORKER = "reflexion_worker"
+    HUMAN_INTERACTION = "human_interaction"
+
+
 @dataclass
 class WorkerResult:
     worker: str
@@ -57,3 +65,4 @@ class SupervisorState(TypedDict):
     routing_reason: Optional[str]
     iteration: int
     max_iterations: int
+    error: Optional[str]

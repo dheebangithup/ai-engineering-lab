@@ -4,6 +4,10 @@ from typing import Optional
 import dotenv
 
 
+ENV_JARVIS_ENV_FILE: str = "JARVIS_ENV_FILE"
+ENV_FILE_NAME: str = ".env"
+
+
 def load_env(start_path: Optional[Path | str] = None) -> Optional[Path]:
     """
     Find and load the .env file for the J.A.R.V.I.S. project.
@@ -14,7 +18,7 @@ def load_env(start_path: Optional[Path | str] = None) -> Optional[Path]:
     3. Upwards from the current working directory.
     """
     # 1. Explicit path in environment variable
-    custom_path = os.getenv("JARVIS_ENV_FILE")
+    custom_path = os.getenv(ENV_JARVIS_ENV_FILE)
     if custom_path and Path(custom_path).is_file():
         dotenv.load_dotenv(custom_path, override=False)
         return Path(custom_path).resolve()
@@ -22,7 +26,7 @@ def load_env(start_path: Optional[Path | str] = None) -> Optional[Path]:
     # 2. Search upwards from start_path or this file's location
     origin = Path(start_path).resolve() if start_path else Path(__file__).resolve()
     for parent in [origin] + list(origin.parents):
-        candidate = parent / ".env"
+        candidate = parent / ENV_FILE_NAME
         if candidate.is_file():
             dotenv.load_dotenv(candidate, override=False)
             return candidate.resolve()

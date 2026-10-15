@@ -16,6 +16,9 @@ from jarvis.tools.implementations.filesystem_tools import (
 from jarvis.tools.tool_registry import ToolRegistry
 
 
+from jarvis.tools.schemas import DefaultToolId
+
+
 def register_default_tools(
     registry: ToolRegistry,
     allowed_base_dir: Path | str,
@@ -32,10 +35,10 @@ def register_default_tools(
     fs = FileSystemTools(allowed_base_dir=allowed_base_dir)
     fs_defs = create_filesystem_tool_definitions()
 
-    registry.register(fs_defs["list_files"], fs.list_files)
-    registry.register(fs_defs["read_file"], fs.read_file)
-    registry.register(fs_defs["write_file"], fs.write_file)
-    registry.register(fs_defs["search_files"], fs.search_files)
+    registry.register(fs_defs[DefaultToolId.LIST_FILES.value], fs.list_files)
+    registry.register(fs_defs[DefaultToolId.READ_FILE.value], fs.read_file)
+    registry.register(fs_defs[DefaultToolId.WRITE_FILE.value], fs.write_file)
+    registry.register(fs_defs[DefaultToolId.SEARCH_FILES.value], fs.search_files)
 
     cmd = CommandTools(allowed_commands=allowed_commands, cwd=allowed_base_dir)
     cmd_def = create_command_tool_definition()
