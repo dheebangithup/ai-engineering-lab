@@ -37,7 +37,7 @@ def register_default_tools(
     registry.register(fs_defs["write_file"], fs.write_file)
     registry.register(fs_defs["search_files"], fs.search_files)
 
-    cmd = CommandTools(allowed_commands=allowed_commands)
+    cmd = CommandTools(allowed_commands=allowed_commands, cwd=allowed_base_dir)
     cmd_def = create_command_tool_definition()
     registry.register(cmd_def, cmd.run_command)
 

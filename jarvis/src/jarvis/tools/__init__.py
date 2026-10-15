@@ -1,4 +1,5 @@
 from jarvis.tools.implementations import register_default_tools
+from jarvis.tools.langchain_adapter import create_gateway_tools
 from jarvis.tools.schemas import ToolDefinition, ToolResult
 from jarvis.tools.tool_discovery import ToolDiscovery
 from jarvis.tools.tool_registry import (
@@ -20,4 +21,5 @@ __all__ = [
     "ToolsGateway",
     "ValidationError",
     "register_default_tools",
+    "create_gateway_tools",
 ]

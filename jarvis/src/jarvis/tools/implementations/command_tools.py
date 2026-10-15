@@ -1,3 +1,4 @@
+from pathlib import Path
 import shutil
 import subprocess
 from typing import Any, Dict, List, Optional, Set
@@ -32,9 +33,15 @@ class CommandTools:
     Executes a strictly limited set of permitted commands without shell execution.
     """
 
-    def __init__(self, allowed_commands: Optional[Set[str]] = None, timeout: int = 15) -> None:
+    def __init__(
+        self,
+        allowed_commands: Optional[Set[str]] = None,
+        timeout: int = 15,
+        cwd: Optional[Path | str] = None,
+    ) -> None:
         self.allowed_commands = allowed_commands if allowed_commands is not None else DEFAULT_ALLOWED_COMMANDS
         self.timeout = timeout
+        self.cwd = Path(cwd).resolve() if cwd is not None else None
 
     def run_command(self, command: str, args: Optional[List[str]] = None) -> Dict[str, Any]:
         """
@@ -61,6 +68,7 @@ class CommandTools:
                 timeout=self.timeout,
                 check=False,
                 shell=False,
+                cwd=str(self.cwd) if self.cwd else None,
             )
             return {
                 "command": command_clean,

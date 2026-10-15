@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,12 +57,21 @@ class Workspace:
         for directory in directories:
             directory.mkdir(parents=True, exist_ok=True)
 
-
-    
 def default_workspace() -> Workspace:
     """
-    Return the default JARVIS workspace.
+    Return the default JARVIS workspace (single source of truth).
+    Respects JARVIS_WORKSPACE environment variable if configured.
     """
-    return Workspace(
-        root=Path.home() / ".jarvis"
-    )           
+    env_root = os.getenv("JARVIS_WORKSPACE")
+    root_path = Path(env_root).resolve() if env_root else (Path.home() / ".jarvis")
+    return Workspace(root=root_path)
+
+
+def initialize_workspace(workspace: Workspace | None = None) -> Workspace:
+    """
+    Application-level initialization function to set up all runtime workspace
+    directories at startup time rather than inside agent components.
+    """
+    ws = workspace or default_workspace()
+    ws.initialize()
+    return ws
