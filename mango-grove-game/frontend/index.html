@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>மாந்தோப்பு வாட்ச்மேன் | The Mango Grove Watchman</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Noto+Sans+Tamil:wght@400;600;800&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <h1>மாந்தோப்பு வாட்ச்மேன்</h1>
+        <span class="subtitle">The Mango Grove Watchman — 2D Stealth AI Sandbox powered by Strata Memory</span>
+      </div>
+      <div class="header-right">
+        <!-- AI Simulation Mode Controls -->
+        <div class="sim-controls-bar">
+          <button id="simModeBtn" class="sim-mode-btn" title="Toggle AI Simulation Mode">
+            <span id="simModeIcon">🎮</span>
+            <span id="simModeLabel">Manual Play</span>
+          </button>
+          <div class="sim-speed-controls" id="simSpeedControls" style="display: none;">
+            <button class="speed-btn active" data-speed="1">1x</button>
+            <button class="speed-btn" data-speed="2">2x</button>
+            <button class="speed-btn" data-speed="4">4x</button>
+            <label class="auto-dawn-label" title="Automatically start next night after dawn reflection">
+              <input type="checkbox" id="autoNextCheckbox" checked> Auto-Dawn
+            </label>
+          </div>
+        </div>
+
+        <div class="status-pill" id="strataStatusPill">
+          <span class="status-dot online"></span>
+          <span class="status-text" id="strataStatusText">Strata: Connected</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content Split Screen -->
+    <main class="main-split">
+      <!-- Left Panel: 2D Canvas (65% width) -->
+      <section class="game-panel">
+        <div class="game-hud">
+          <div class="hud-item">
+            <span class="hud-label">ராத்திரி (Night):</span>
+            <span class="hud-value highlight" id="hudNight">#1</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">நேரம் (Survival Time):</span>
+            <span class="hud-value timer" id="hudTimer">00:00</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">முறை (Mode):</span>
+            <span class="hud-value highlight">♾️ Endless (Until Caught)</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">பங்கனப்பள்ளி மாம்பழம்:</span>
+            <span class="hud-value mango" id="hudMangoes">0 / 2</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">கற்கள் (Stones):</span>
+            <span class="hud-value stones" id="hudStones">🪨 🪨 🪨</span>
+          </div>
+          <div class="hud-item">
+            <span class="hud-label">விளக்கு (Grove Lights):</span>
+            <span class="hud-value lights-on" id="hudLights">ON</span>
+          </div>
+          <div class="hud-item">
+            <button id="soundToggleBtn" class="hud-sound-btn">🔊 Audio: ON</button>
+          </div>
+        </div>
+
+        <div class="canvas-wrapper">
+          <canvas id="gameCanvas" width="800" height="600"></canvas>
+          
+          <!-- Interaction Prompt Overlay -->
+          <div class="interaction-prompt hidden" id="interactPrompt">
+            Press <kbd>E</kbd> to Interact
+          </div>
+
+          <!-- Channel Progress Bar (Plucking mango / Squeezing fence) -->
+          <div class="channel-bar-wrapper hidden" id="channelWrapper">
+            <div class="channel-label" id="channelLabel">Plucking Mango...</div>
+            <div class="channel-progress">
+              <div class="channel-fill" id="channelFill"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls-legend">
+          <div class="control-key"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> / <kbd>Arrows</kbd> Move</div>
+          <div class="control-key"><kbd>Shift</kbd> Sprint (Loud footsteps!)</div>
+          <div class="control-key"><kbd>Space</kbd> / <kbd>Click</kbd> Throw Stone (Distraction)</div>
+          <div class="control-key"><kbd>E</kbd> Interact (Pluck Mango / Cut Power / Hide)</div>
+          <div class="control-key"><kbd>R</kbd> Restart Night</div>
+        </div>
+      </section>
+
+      <!-- Right Panel: Strata Memory Inspector (35% width) -->
+      <aside class="inspector-panel">
+        <div class="inspector-header">
+          <h2>🧠 முருகேசன் மாமாவின் சிந்தனை</h2>
+          <span class="inspector-sub">Strata 4-Pillar Cognitive Inspector</span>
+        </div>
+
+        <!-- Velu (AI Kid) Strategy Card (Visible during AI Simulation Mode) -->
+        <div class="thought-card velu-card" id="veluCard" style="display: none;">
+          <div class="thought-role">
+            <span class="mama-avatar">👦🏽</span>
+            <div>
+              <strong>வேலு (Kid AI Thief)</strong>
+              <span class="thought-action velu-action" id="veluActionBadge">PLANNING</span>
+            </div>
+          </div>
+          <div class="thought-bubble-text velu-bubble" id="veluDialogueTa">
+            "மாமா எங்க நிக்கிறாருன்னு நோட்டம் விடுவோம்..."
+          </div>
+          <div class="thought-bubble-en" id="veluDialogueEn">
+            "Scouting Mama's flashlight pattern..."
+          </div>
+          <div class="thought-reasoning" id="veluReasoning">
+            <strong>Strategy:</strong> Infiltrating grove safely. Avoiding central vision cone.
+          </div>
+        </div>
+
+        <!-- Latest Thought Bubble Card -->
+        <div class="thought-card">
+          <div class="thought-role">
+            <span class="mama-avatar">👴🏽</span>
+            <div>
+              <strong>முருகேசன் மாமா (Murugesan Mama)</strong>
+              <span class="thought-action" id="mamaActionBadge">PATROL</span>
+            </div>
+          </div>
+          <div class="thought-bubble-text" id="mamaDialogueTa">
+            "பங்கனப்பள்ளி மாம்பழத்தை எந்த பையனும் தொட விடமாட்டேன்!"
+          </div>
+          <div class="thought-bubble-en" id="mamaDialogueEn">
+            "I won't let any village kid touch my Banganapalli mangoes!"
+          </div>
+          <div class="thought-reasoning" id="mamaReasoning">
+            <strong>Reasoning:</strong> Procedural patrol step 1: Monitoring grove center.
+          </div>
+        </div>
+
+        <!-- 4 Pillars Section -->
+        <div class="pillars-section">
+          <h3>Strata Active Cognitive State</h3>
+
+          <!-- Pillar: Semantic -->
+          <div class="pillar-card semantic">
+            <div class="pillar-header">
+              <span class="pillar-tag tag-blue">🟦 Semantic (உண்மைகள்)</span>
+              <span class="pillar-count" id="countSemantic">2 rules</span>
+            </div>
+            <div class="pillar-content" id="listSemantic">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Pillar: Episodic -->
+          <div class="pillar-card episodic">
+            <div class="pillar-header">
+              <span class="pillar-tag tag-amber">🟨 Episodic (சம்பவங்கள்)</span>
+              <span class="pillar-count" id="countEpisodic">0 nights</span>
+            </div>
+            <div class="pillar-content" id="listEpisodic">
+              <div class="empty-hint">No past nights recorded yet. Pluck mangoes or get caught!</div>
+            </div>
+          </div>
+
+          <!-- Pillar: Procedural -->
+          <div class="pillar-card procedural">
+            <div class="pillar-header">
+              <span class="pillar-tag tag-green">🟩 Procedural (ரவுண்ட்ஸ் திட்டம்)</span>
+              <span class="pillar-count" id="countProcedural">Patrol v1</span>
+            </div>
+            <div class="pillar-content" id="listProcedural">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+
+          <!-- Pillar: Entity -->
+          <div class="pillar-card entity">
+            <div class="pillar-header">
+              <span class="pillar-tag tag-purple">🟪 Entity Graph (தொடர்புகள்)</span>
+              <span class="pillar-count" id="countEntity">2 entities</span>
+            </div>
+            <div class="pillar-content" id="listEntity">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Manual Memory Injection Box -->
+        <div class="injection-card">
+          <h4>🧪 Manual Memory Injection</h4>
+          <p class="injection-desc">Inject insight directly into Murugesan Mama's brain at runtime:</p>
+          <div class="injection-inputs">
+            <select id="injectPillarSelect">
+              <option value="semantic">Semantic Rule</option>
+              <option value="procedural">Procedural Tactic</option>
+              <option value="episodic">Episodic Trace</option>
+            </select>
+            <input type="text" id="injectTextInput" placeholder="e.g. Kid hides in haystack when power cut">
+            <button id="injectBtn">Inject</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Dawn Reflection Overlay Modal -->
+    <div class="dawn-modal-backdrop hidden" id="dawnModal">
+      <div class="dawn-modal">
+        <div class="dawn-header">
+          <span class="dawn-icon">🌅</span>
+          <h2>விடியற்காலை சிந்தனை (Dawn Reflection)</h2>
+          <p>Murugesan Mama is consolidating memories into Strata...</p>
+        </div>
+
+        <div class="dawn-outcome" id="dawnOutcomeBanner">
+          YOU ESCAPED WITH THE MANGOES!
+        </div>
+
+        <div class="dawn-narrative" id="dawnNarrativeBox">
+          Consolidating night events...
+        </div>
+
+        <div class="dawn-patch-box">
+          <div class="patch-title">🔄 Procedural Memory Evolution:</div>
+          <div class="patch-details" id="dawnPatchDetails">
+            Patrol Plan upgraded to v2. Counter-tactics applied against stone distractions.
+          </div>
+        </div>
+
+        <button class="dawn-btn" id="startNextNightBtn">அடுத்த ராத்திரி (Start Next Night)</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/game.js"></script>
+</body>
+</html>
