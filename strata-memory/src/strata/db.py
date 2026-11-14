@@ -1,9 +1,24 @@
 import asyncio
 import json
 import logging
+import socket
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse, parse_qs, urlencode
+
+# Resilient DNS fallback for Neon serverless PostgreSQL when ISP DNS drops/refuses AWS domains
+_orig_getaddrinfo = socket.getaddrinfo
+def _resilient_getaddrinfo(host, port, *args, **kwargs):
+    try:
+        return _orig_getaddrinfo(host, port, *args, **kwargs)
+    except (socket.gaierror, OSError):
+        if host and "neon.tech" in str(host):
+            # Fallback to verified Neon AWS IPs (ap-southeast-1)
+            for fallback_ip in ["13.228.46.236", "52.220.170.93", "13.228.184.177"]:
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (fallback_ip, port))]
+        raise
+
+socket.getaddrinfo = _resilient_getaddrinfo
 
 import asyncpg
 from strata.config import settings
