@@ -14,6 +14,8 @@ This document provides a comprehensive technical reference for **all 6 core oper
 | **`memory_edit`** | `memory_edit` | `POST /v1/memory/edit` | Natural language modification & superseding | Yes (Small LLM) | ~1.5s |
 | **`memory_feedback`** | `memory_feedback` | `POST /v1/memory/feedback` | Utility score reinforcement & skill self-healing | Optional (Only on fail patch) | <10ms / ~1.5s (if patching) |
 | **`memory_delete`** | `memory_delete` | `POST /v1/memory/delete` | Soft-invalidation or hard deletion | **No (Zero-LLM)** | <10ms |
+| **`memory_prune`** | `memory_prune` | `POST /v1/memory/prune` | Cognitive Distillation & stale memory pruning | Yes (Small LLM distillation) | ~1.5s |
+| **`memory_purge_namespace`** | `memory_purge_namespace` | `POST /v1/memory/purge-namespace` | Destructive wipe of entire namespace (GDPR / reset) | **No (Zero-LLM)** | <15ms |
 
 ---
 
@@ -30,6 +32,9 @@ Deterministic, multi-pillar recall engine that fuses vector cosine similarity, f
 | `pillars` | `List[string]` | No | `["semantic", "episodic", "procedural", "entity"]` | **Pillar Filter.** Restricts recall to any combination of: `"semantic"`, `"episodic"`, `"procedural"`, `"entity"`. |
 | `top_k` | `integer` | No | `5` | Maximum number of candidate items returned per pillar. |
 | `token_budget` | `integer` | No | `1500` | Maximum token budget for the generated `<strata_memory_context>` XML block (computed as `chars // 4`). Truncation preserves XML tag validity. |
+| `match_threshold` | `float` | No | `0.35` | Vector cosine similarity cutoff threshold in `hybrid_memory_search()`. |
+| `min_score` | `float` | No | `0.0` | Minimum composite/RRF score threshold below which candidates are excluded. |
+| `similarity_threshold` | `float` | No | `0.40` | Vector cosine similarity threshold for entity graph seed node matching. |
 
 ### Internal Ranking & Filtering Logic
 
@@ -121,7 +126,7 @@ Deterministic, multi-pillar recall engine that fuses vector cosine similarity, f
 
 ## 2. `memory_ingest` (Write Path: Autonomous Routing & Extraction)
 
-Takes raw, unstructured text from an agent conversation or log, pre-fetches similar existing memories, and uses the Small Decision LLM (`qwen3:8b`) to split the text into 4 pillars, detect contradictions, and update knowledge.
+Takes raw, unstructured text from an agent conversation or log, pre-fetches similar existing memories, and uses the **Laya Decision Model (<5ms)** for fast-path routing of simple facts and updates, or delegates complex multi-pillar narratives to the Small Decision LLM (`qwen3:8b`) to split text into 4 pillars, detect contradictions, and update knowledge.
 
 ### Parameters & Option Filters
 
@@ -129,8 +134,10 @@ Takes raw, unstructured text from an agent conversation or log, pre-fetches simi
 |---|---|---|---|---|
 | `raw_text` | `string` | **Yes** | — | Raw natural language input to be categorized and ingested. |
 | `namespace` | `string` | No | `"default"` | Target namespace partition. |
-| `fast_mode` | `boolean` | No | `false` | **Fast Mode Bypass.** If `true`, bypasses LLM extraction and immediately inserts `raw_text` as a semantic memory with `<15ms` latency. |
+| `fast_mode` | `boolean` | No | `false` | **Fast Mode Bypass.** If `true`, bypasses all decision logic and immediately inserts `raw_text` as a raw semantic memory with `<15ms` latency. |
 | `source_id` | `string` | No | `null` | Optional external reference ID (e.g., chat message ID, git commit hash, file path). |
+| `contradiction_threshold` | `float` | No | `0.94` | Cosine similarity threshold above which near-duplicate facts are superseded. |
+| `use_decision_model` | `boolean` | No | `true` | Toggle Laya Decision Engine pre-routing (if `false`, routes directly to Small LLM). |
 
 ### Response Schema
 ```json
@@ -347,6 +354,47 @@ Controls memory pruning, expiration, and deletion.
   "pillar": "semantic",
   "hard_delete": false,
   "namespace": "production"
+}
+```
+
+---
+
+## 7. `memory_prune` (Cognitive Distillation & Garbage Collection)
+
+Safely consolidates and purges expired, soft-deleted, and stale memories.
+
+### Lifecycle Pipeline
+1. **Auto-Retire Toxic Memories:** Soft-invalidates memories whose `utility_score <= -5` (or custom threshold).
+2. **Cognitive Distillation:** Passes soft-expired episodic logs to the Small LLM (`qwen2.5:3b-instruct` / `qwen3:8b`). Extracts any durable troubleshooting runbooks into `procedural_memories` and any permanent facts into `semantic` memories before deleting raw episodes.
+3. **Hard Purge Superseded Records:** Permanently purges historical rows older than `superseded_older_than_days` (default 90 days) to reclaim disk space.
+
+### Example Payload
+```json
+{
+  "namespace": "production",
+  "distill_episodes": true,
+  "episodic_older_than_days": 30,
+  "superseded_older_than_days": 90,
+  "retire_toxic_threshold": -5,
+  "batch_size": 20
+}
+```
+
+---
+
+## 8. `memory_purge_namespace` (GDPR & Full Wipe)
+
+Wipes all memories, procedures, and entity graph records for a specific namespace.
+
+### Parameters
+* `namespace`: Name of namespace to wipe.
+* `confirm`: Must explicitly be `true` for destructive action.
+
+### Example Payload
+```json
+{
+  "namespace": "ephemeral_test_run",
+  "confirm": true
 }
 ```
 

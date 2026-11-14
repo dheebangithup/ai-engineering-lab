@@ -22,8 +22,17 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_memories_ns_type_active
-    ON memories (namespace, type) WHERE valid_until IS NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_ns_type_valid_until
+    ON memories (namespace, type, valid_until);
+
+CREATE INDEX IF NOT EXISTS idx_memories_ns_type_created_at
+    ON memories (namespace, type, created_at ASC);
+
+CREATE INDEX IF NOT EXISTS idx_memories_superseded_by
+    ON memories (superseded_by) WHERE superseded_by IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_memories_valid_until
+    ON memories (valid_until) WHERE valid_until IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw
     ON memories USING hnsw (embedding vector_cosine_ops)
@@ -57,6 +66,9 @@ CREATE INDEX IF NOT EXISTS idx_procedural_trigger_hnsw
     ON procedural_memories USING hnsw (trigger_embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
 
+CREATE INDEX IF NOT EXISTS idx_procedural_ns_active
+    ON procedural_memories (namespace) WHERE is_active = TRUE;
+
 -- ============================================================================
 -- 3. ENTITY GRAPH MEMORY TABLES (BI-TEMPORAL NODES & EDGES)
 -- ============================================================================
@@ -68,13 +80,19 @@ CREATE TABLE IF NOT EXISTS entity_nodes (
     summary TEXT NOT NULL,
     attributes JSONB NOT NULL DEFAULT '{}'::jsonb,
     embedding VECTOR(768) NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(namespace, name, entity_type)
 );
 
+ALTER TABLE entity_nodes ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+
 CREATE INDEX IF NOT EXISTS idx_entity_nodes_embedding_hnsw
     ON entity_nodes USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 64);
+
+CREATE INDEX IF NOT EXISTS idx_entity_nodes_ns_active
+    ON entity_nodes (namespace) WHERE is_active = TRUE;
 
 CREATE TABLE IF NOT EXISTS entity_edges (
     edge_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -88,9 +106,13 @@ CREATE TABLE IF NOT EXISTS entity_edges (
     valid_until TIMESTAMPTZ DEFAULT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_entity_edges_active
-    ON entity_edges (namespace, source_entity_id, target_entity_id)
-    WHERE valid_until IS NULL;
+-- 1-Hop Graph Traversal & Conflict Invalidation: Source to Target
+CREATE INDEX IF NOT EXISTS idx_entity_edges_src_rel
+    ON entity_edges (namespace, source_entity_id, relation_type, valid_until);
+
+-- 1-Hop Graph Traversal: Incoming Edges into Target
+CREATE INDEX IF NOT EXISTS idx_entity_edges_tgt
+    ON entity_edges (namespace, target_entity_id, valid_until);
 
 -- ============================================================================
 -- 4. RECIPROCAL RANK FUSION (RRF) + UTILITY SCORE SQL FUNCTION
@@ -145,7 +167,7 @@ BEGIN
         FROM memories m
         WHERE m.namespace = target_namespace
           AND m.type = ANY(target_types)
-          AND m.valid_until IS NULL
+          AND (m.valid_until IS NULL OR m.valid_until > NOW())
           AND (1.0 - (m.embedding <=> query_embedding)) >= match_threshold
         LIMIT 50
     ),
@@ -168,7 +190,7 @@ BEGIN
         FROM memories m
         WHERE m.namespace = target_namespace
           AND m.type = ANY(target_types)
-          AND m.valid_until IS NULL
+          AND (m.valid_until IS NULL OR m.valid_until > NOW())
           AND has_text_query
           AND to_tsvector('english', m.summary) @@ parsed_query
         LIMIT 50

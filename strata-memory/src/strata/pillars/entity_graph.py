@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 import asyncpg
+from strata.config import settings
 from strata.db import get_db_pool
 from strata.embedder import LocalEmbedder
 from strata.models import EntityGraphItem
@@ -20,7 +21,7 @@ async def upsert_entity_node(
     embedder = LocalEmbedder.get_instance()
     if embedding is None:
         embed_input = f"{name} ({entity_type}): {summary}"
-        embedding = embedder.embed_one(embed_input)
+        embedding = await embedder.embed_one(embed_input)
     vec_str = embedder.to_pgvector_str(embedding)
 
     pool = await get_db_pool() if conn is None else None
@@ -28,14 +29,15 @@ async def upsert_entity_node(
     async def _execute(c: asyncpg.Connection) -> str:
         sql = """
             INSERT INTO entity_nodes (
-                namespace, name, entity_type, summary, attributes, embedding, updated_at
+                namespace, name, entity_type, summary, attributes, embedding, is_active, updated_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6::vector(768), NOW())
+            VALUES ($1, $2, $3, $4, $5, $6::vector(768), TRUE, NOW())
             ON CONFLICT (namespace, name, entity_type)
             DO UPDATE SET
                 summary = EXCLUDED.summary,
                 attributes = entity_nodes.attributes || EXCLUDED.attributes,
                 embedding = EXCLUDED.embedding,
+                is_active = TRUE,
                 updated_at = NOW()
             RETURNING entity_id;
         """
@@ -93,7 +95,7 @@ async def upsert_entity_link(
                 WHERE namespace = $1
                   AND source_entity_id = $2
                   AND relation_type = $3
-                  AND valid_until IS NULL;
+                  AND (valid_until IS NULL OR valid_until > NOW());
             """
             await c.execute(invalidate_sql, namespace, UUID(src_id), relation_type)
 
@@ -130,12 +132,18 @@ async def search_entity_subgraph(
     query_text: str,
     namespace: str = "default",
     top_k: int = 5,
+    similarity_threshold: Optional[float] = None,
     conn: Optional[asyncpg.Connection] = None,
 ) -> List[EntityGraphItem]:
     """Finds top matching entity_nodes via vector or ILIKE match, then performs
     a 1-hop traversal across active entity_edges."""
     vec_str = LocalEmbedder.to_pgvector_str(query_embedding)
     clean_query = query_text.strip()
+    thresh = (
+        similarity_threshold
+        if similarity_threshold is not None
+        else settings.entity_similarity_threshold
+    )
     pool = await get_db_pool() if conn is None else None
 
     async def _execute(c: asyncpg.Connection) -> List[EntityGraphItem]:
@@ -144,9 +152,10 @@ async def search_entity_subgraph(
                 SELECT entity_id
                 FROM entity_nodes
                 WHERE namespace = $1
+                  AND is_active = TRUE
                   AND (
                       ($2 <> '' AND name ILIKE '%' || $2 || '%')
-                      OR (1.0 - (embedding <=> $3::vector(768))) >= 0.40
+                      OR (1.0 - (embedding <=> $3::vector(768))) >= $5
                   )
                 ORDER BY (embedding <=> $3::vector(768)) ASC
                 LIMIT $4
@@ -165,7 +174,9 @@ async def search_entity_subgraph(
             JOIN entity_nodes src ON e.source_entity_id = src.entity_id
             JOIN entity_nodes tgt ON e.target_entity_id = tgt.entity_id
             WHERE e.namespace = $1
-              AND e.valid_until IS NULL
+              AND (e.valid_until IS NULL OR e.valid_until > NOW())
+              AND src.is_active = TRUE
+              AND tgt.is_active = TRUE
               AND (
                   e.source_entity_id IN (SELECT entity_id FROM seed_nodes)
                   OR e.target_entity_id IN (SELECT entity_id FROM seed_nodes)
@@ -173,7 +184,7 @@ async def search_entity_subgraph(
             ORDER BY e.valid_from DESC
             LIMIT $4 * 3;
         """
-        rows = await c.fetch(sql, namespace, clean_query, vec_str, top_k)
+        rows = await c.fetch(sql, namespace, clean_query, vec_str, top_k, thresh)
         results = []
         for r in rows:
             results.append(
@@ -233,12 +244,34 @@ async def delete_entity(
                 )
                 return " 0" not in res_node
             else:
+                # Soft delete edge
                 res = await c.execute(
-                    "UPDATE entity_edges SET valid_until = NOW() WHERE edge_id = $1 AND namespace = $2 AND valid_until IS NULL",
+                    "UPDATE entity_edges SET valid_until = NOW() WHERE edge_id = $1 AND namespace = $2 AND (valid_until IS NULL OR valid_until > NOW())",
                     target_uuid,
                     namespace,
                 )
-                return " 0" not in res
+                if " 0" not in res:
+                    return True
+                # If not edge, soft-delete node and all attached edges
+                res_node = await c.execute(
+                    "UPDATE entity_nodes SET is_active = FALSE WHERE entity_id = $1 AND namespace = $2 AND is_active = TRUE",
+                    target_uuid,
+                    namespace,
+                )
+                if " 0" not in res_node:
+                    await c.execute(
+                        """
+                        UPDATE entity_edges
+                        SET valid_until = NOW()
+                        WHERE namespace = $1
+                          AND (valid_until IS NULL OR valid_until > NOW())
+                          AND (source_entity_id = $2 OR target_entity_id = $2);
+                        """,
+                        namespace,
+                        target_uuid,
+                    )
+                    return True
+                return False
         else:
             # Delete node by name
             if hard_delete:
@@ -249,13 +282,18 @@ async def delete_entity(
                 )
                 return " 0" not in res
             else:
+                res_node = await c.execute(
+                    "UPDATE entity_nodes SET is_active = FALSE WHERE name = $1 AND namespace = $2 AND is_active = TRUE",
+                    target_id_or_name,
+                    namespace,
+                )
                 # Soft delete all active edges attached to this node
-                res = await c.execute(
+                res_edge = await c.execute(
                     """
                     UPDATE entity_edges
                     SET valid_until = NOW()
                     WHERE namespace = $1
-                      AND valid_until IS NULL
+                      AND (valid_until IS NULL OR valid_until > NOW())
                       AND (
                           source_entity_id IN (SELECT entity_id FROM entity_nodes WHERE name = $2 AND namespace = $1)
                           OR target_entity_id IN (SELECT entity_id FROM entity_nodes WHERE name = $2 AND namespace = $1)
@@ -264,7 +302,7 @@ async def delete_entity(
                     namespace,
                     target_id_or_name,
                 )
-                return " 0" not in res
+                return (" 0" not in res_node) or (" 0" not in res_edge)
 
     if conn is not None:
         return await _execute(conn)

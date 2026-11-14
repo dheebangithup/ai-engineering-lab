@@ -12,6 +12,8 @@ from strata.service import (
     svc_memory_edit,
     svc_memory_feedback,
     svc_memory_ingest,
+    svc_memory_prune,
+    svc_memory_purge_namespace,
     svc_memory_recall,
     svc_memory_store_explicit,
 )
@@ -167,6 +169,13 @@ async def memory_ingest(
             description="Optional external audit reference ID (e.g. git commit hash, session ID, ticket number).",
         ),
     ] = None,
+    ttl_seconds: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            description="Optional time-to-live in seconds. After this duration, the memory soft-expires.",
+        ),
+    ] = None,
 ) -> str:
     """Autonomously ingest and route unstructured information across the 4 Memory Pillars.
 
@@ -191,6 +200,7 @@ async def memory_ingest(
             namespace=namespace,
             fast_mode=fast_mode,
             source_id=source_id,
+            ttl_seconds=ttl_seconds,
         )
         return res.model_dump_json(indent=2)
     finally:
@@ -231,6 +241,13 @@ async def memory_store_explicit(
             description="Multi-tenancy isolation namespace (default: 'default').",
         ),
     ] = "default",
+    ttl_seconds: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            description="Optional time-to-live in seconds. After this duration, the memory soft-expires.",
+        ),
+    ] = None,
 ) -> str:
     """Direct, Zero-LLM structured insertion into a specific Memory Pillar (<10ms).
 
@@ -247,6 +264,7 @@ async def memory_store_explicit(
             pillar=pillar,
             payload=payload,
             namespace=namespace,
+            ttl_seconds=ttl_seconds,
         )
         return json.dumps(res, indent=2)
     finally:
@@ -426,6 +444,110 @@ async def memory_delete(
             namespace=namespace,
         )
         return json.dumps(res, indent=2)
+    finally:
+        await maybe_suspend_neon_compute()
+
+
+# ============================================================================
+# TOOL 7: memory_prune
+# ============================================================================
+@mcp.tool()
+async def memory_prune(
+    namespace: Annotated[
+        str,
+        Field(
+            default="default",
+            description="Multi-tenancy isolation namespace to prune.",
+        ),
+    ] = "default",
+    distill_episodes: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="If True, uses Small LLM to distill reusable runbooks and permanent facts before purging raw episodes.",
+        ),
+    ] = True,
+    episodic_older_than_days: Annotated[
+        Optional[int],
+        Field(
+            default=30,
+            description="Prune episodic memories older than X days (or those whose TTL has expired). Set None to only prune TTL-expired.",
+        ),
+    ] = 30,
+    superseded_older_than_days: Annotated[
+        int,
+        Field(
+            default=90,
+            description="Permanently delete historical superseded/soft-deleted rows older than X days.",
+        ),
+    ] = 90,
+    retire_toxic_threshold: Annotated[
+        Optional[int],
+        Field(
+            default=-5,
+            description="Automatically soft-retire memories with utility_score <= threshold (default: -5).",
+        ),
+    ] = -5,
+    batch_size: Annotated[
+        int,
+        Field(
+            default=20,
+            description="Maximum number of expired episodes to distill and prune per invocation.",
+        ),
+    ] = 20,
+) -> str:
+    """Consolidates and prunes expired or stale memories using Cognitive Distillation.
+
+    WHEN TO USE:
+    - Periodically to reclaim storage and keep retrieval fast.
+    - To safely retire old episodic logs without losing hard-won lessons (synthesizes them into runbooks & semantic facts).
+    - To purge dead superseded facts and auto-retire toxic memories that repeatedly cause failures.
+    """
+    try:
+        res = await svc_memory_prune(
+            namespace=namespace,
+            distill_episodes=distill_episodes,
+            episodic_older_than_days=episodic_older_than_days,
+            superseded_older_than_days=superseded_older_than_days,
+            retire_toxic_threshold=retire_toxic_threshold,
+            batch_size=batch_size,
+        )
+        return res.model_dump_json(indent=2)
+    finally:
+        await maybe_suspend_neon_compute()
+
+
+# ============================================================================
+# TOOL 8: memory_purge_namespace
+# ============================================================================
+@mcp.tool()
+async def memory_purge_namespace(
+    namespace: Annotated[
+        str,
+        Field(
+            description="Name of the namespace to completely erase.",
+        ),
+    ],
+    confirm: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Explicit confirmation flag (must be True to execute destructive wipe).",
+        ),
+    ] = False,
+) -> str:
+    """Permanently purges all memories, procedures, and entity nodes/edges in a namespace.
+
+    WHEN TO USE:
+    - User privacy / GDPR Right to be Forgotten requests.
+    - Resetting temporary test or staging namespaces.
+    """
+    try:
+        res = await svc_memory_purge_namespace(
+            namespace=namespace,
+            confirm=confirm,
+        )
+        return res.model_dump_json(indent=2)
     finally:
         await maybe_suspend_neon_compute()
 

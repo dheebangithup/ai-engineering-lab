@@ -12,6 +12,10 @@ from strata.models import (
     FeedbackRequest,
     IngestRequest,
     IngestResponse,
+    PruneRequest,
+    PruneResponse,
+    PurgeNamespaceRequest,
+    PurgeNamespaceResponse,
     RecallRequest,
     RecallResponse,
     StoreExplicitRequest,
@@ -21,6 +25,8 @@ from strata.service import (
     svc_memory_edit,
     svc_memory_feedback,
     svc_memory_ingest,
+    svc_memory_prune,
+    svc_memory_purge_namespace,
     svc_memory_recall,
     svc_memory_store_explicit,
 )
@@ -63,13 +69,16 @@ async def health_check() -> Dict[str, str]:
 
 @app.post("/v1/memory/ingest", response_model=IngestResponse)
 async def api_memory_ingest(req: IngestRequest) -> IngestResponse:
-    """Autonomous 4-pillar extraction & storage using Small Decision LLM."""
+    """Autonomous 4-pillar extraction & storage using Laya Decision Engine and Small LLM."""
     try:
         return await svc_memory_ingest(
             raw_text=req.raw_text,
             namespace=req.namespace,
             fast_mode=req.fast_mode,
             source_id=req.source_id,
+            contradiction_threshold=req.contradiction_threshold,
+            use_decision_model=req.use_decision_model,
+            ttl_seconds=req.ttl_seconds,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -85,6 +94,9 @@ async def api_memory_recall(req: RecallRequest) -> RecallResponse:
             pillars=req.pillars,
             top_k=req.top_k,
             token_budget=req.token_budget,
+            match_threshold=req.match_threshold,
+            min_score=req.min_score,
+            similarity_threshold=req.similarity_threshold,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -98,6 +110,7 @@ async def api_memory_store(req: StoreExplicitRequest) -> Dict[str, Any]:
             pillar=req.pillar,
             payload=req.payload,
             namespace=req.namespace,
+            ttl_seconds=req.ttl_seconds,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -141,6 +154,34 @@ async def api_memory_delete(req: DeleteRequest) -> Dict[str, Any]:
             pillar=req.pillar,
             hard_delete=req.hard_delete,
             namespace=req.namespace,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/v1/memory/prune", response_model=PruneResponse)
+async def api_memory_prune(req: PruneRequest) -> PruneResponse:
+    """Consolidates and prunes expired/stale memories via Cognitive Distillation."""
+    try:
+        return await svc_memory_prune(
+            namespace=req.namespace,
+            distill_episodes=req.distill_episodes,
+            episodic_older_than_days=req.episodic_older_than_days,
+            superseded_older_than_days=req.superseded_older_than_days,
+            retire_toxic_threshold=req.retire_toxic_threshold,
+            batch_size=req.batch_size,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/v1/memory/purge-namespace", response_model=PurgeNamespaceResponse)
+async def api_memory_purge_namespace(req: PurgeNamespaceRequest) -> PurgeNamespaceResponse:
+    """Permanently purges all data in a namespace (GDPR / reset compliance)."""
+    try:
+        return await svc_memory_purge_namespace(
+            namespace=req.namespace,
+            confirm=req.confirm,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))

@@ -121,6 +121,9 @@ class RecallRequest(BaseModel):
     pillars: List[str] = Field(default_factory=lambda: ["semantic", "episodic", "procedural", "entity"])
     top_k: int = 5
     token_budget: int = 1500
+    match_threshold: Optional[float] = None
+    min_score: Optional[float] = None
+    similarity_threshold: Optional[float] = None
 
 
 class RecallResponse(BaseModel):
@@ -143,6 +146,9 @@ class IngestRequest(BaseModel):
     namespace: str = "default"
     fast_mode: bool = False
     source_id: Optional[str] = None
+    ttl_seconds: Optional[int] = None
+    contradiction_threshold: Optional[float] = None
+    use_decision_model: Optional[bool] = None
 
 
 class IngestResponse(BaseModel):
@@ -157,6 +163,7 @@ class IngestResponse(BaseModel):
 class StoreExplicitRequest(BaseModel):
     pillar: Literal["semantic", "episodic", "procedural", "entity"]
     payload: Dict[str, Any]
+    ttl_seconds: Optional[int] = None
     namespace: str = "default"
 
 
@@ -180,3 +187,53 @@ class DeleteRequest(BaseModel):
     pillar: Literal["semantic", "episodic", "procedural", "entity"] = "semantic"
     hard_delete: bool = False
     namespace: str = "default"
+
+
+class DistilledSemanticFact(BaseModel):
+    summary: str
+    tags: List[str] = Field(default_factory=list)
+    confidence: float = 1.0
+
+
+class DistilledProcedure(BaseModel):
+    name: str
+    description: str
+    trigger_condition: str
+    steps: List[str] = Field(default_factory=list)
+
+
+class MemoryDistillationPlan(BaseModel):
+    has_durable_knowledge: bool = False
+    semantic_facts: List[DistilledSemanticFact] = Field(default_factory=list)
+    procedures: List[DistilledProcedure] = Field(default_factory=list)
+    reasoning: str = ""
+
+
+class PruneRequest(BaseModel):
+    namespace: str = "default"
+    distill_episodes: bool = True
+    episodic_older_than_days: Optional[int] = 30
+    superseded_older_than_days: int = 90
+    retire_toxic_threshold: Optional[int] = -5
+    batch_size: int = 20
+
+
+class PruneResponse(BaseModel):
+    namespace: str
+    distilled_facts_created: int = 0
+    distilled_procedures_created: int = 0
+    episodes_pruned: int = 0
+    superseded_pruned: int = 0
+    toxic_memories_retired: int = 0
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PurgeNamespaceRequest(BaseModel):
+    namespace: str
+    confirm: bool = False
+
+
+class PurgeNamespaceResponse(BaseModel):
+    namespace: str
+    purged: bool
+    deleted_counts: Dict[str, int] = Field(default_factory=dict)

@@ -97,3 +97,37 @@ Respond ONLY with a JSON object:
   "changelog_reason": "..."
 }
 """
+
+DISTILLATION_PROMPT = """You are Strata's Cognitive Memory Distillation & Compaction Specialist.
+You are reviewing a batch of historical episodic memories (interactions, tool executions, task runs) that are scheduled for archival and deletion.
+
+Your critical goal: PREVENT LOSS OF VALUABLE KNOWLEDGE.
+Analyze the episodic memories and extract any durable, reusable intelligence before the raw episodes are purged:
+1. Reusable Runbooks / Troubleshooting Procedures:
+   - Multi-step workflows, recovery steps, or runbooks discovered or verified during these tasks.
+2. Lasting Facts, Discoveries, or User Preferences:
+   - Permanent project configurations, domain truths, environmental constraints, architectural decisions, or user preferences.
+3. Ignore Transient Chatter / Disposable Logs:
+   - Routine greetings, simple queries, temporary status checks, or uninformative logs should NOT be saved.
+
+Respond ONLY with a JSON object conforming exactly to this structure:
+{
+  "has_durable_knowledge": true,
+  "semantic_facts": [
+    {
+      "summary": "Concise factual statement to preserve permanently",
+      "tags": ["tag1", "tag2"],
+      "confidence": 1.0
+    }
+  ],
+  "procedures": [
+    {
+      "name": "snake_case_runbook_name",
+      "description": "Clear description of the workflow or troubleshooting procedure",
+      "trigger_condition": "When this situation occurs",
+      "steps": ["Step 1", "Step 2", "Step 3"]
+    }
+  ],
+  "reasoning": "Brief explanation of what was extracted or why episodes are disposable"
+}
+"""

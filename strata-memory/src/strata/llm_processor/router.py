@@ -7,13 +7,16 @@ from openai import AsyncOpenAI
 from strata.config import settings
 from strata.db import get_db_pool
 from strata.embedder import LocalEmbedder
+from strata.laya import laya_engine
 from strata.llm_processor.prompts import (
+    DISTILLATION_PROMPT,
     EDIT_INSTRUCTION_PROMPT,
     EXTRACTION_SYSTEM_PROMPT,
     PROCEDURE_PATCH_PROMPT,
 )
 from strata.models import (
     IngestResponse,
+    MemoryDistillationPlan,
     MemoryExtractionPlan,
     ProcedurePatchPlan,
 )
@@ -37,10 +40,17 @@ async def prefetch_relevant_context(
     raw_text: str,
     raw_embedding: List[float],
     namespace: str,
+    semantic_limit: Optional[int] = None,
+    procedural_limit: Optional[int] = None,
+    entity_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Prefetches existing similar memories, procedures, and entities to feed into the extraction LLM."""
+    """Prefetches existing similar memories, procedures, and entities to feed into the extraction LLM or Laya."""
     pool = await get_db_pool()
     vec_str = LocalEmbedder.to_pgvector_str(raw_embedding)
+
+    sem_lim = semantic_limit or settings.prefetch_semantic_limit
+    proc_lim = procedural_limit or settings.prefetch_procedural_limit
+    ent_lim = entity_limit or settings.prefetch_entity_limit
 
     async with pool.acquire() as c:
         # 1. Top active semantic memories
@@ -50,12 +60,13 @@ async def prefetch_relevant_context(
             FROM memories
             WHERE namespace = $1
               AND type = 'semantic'
-              AND valid_until IS NULL
+              AND (valid_until IS NULL OR valid_until > NOW())
             ORDER BY (embedding <=> $2::vector(768)) ASC
-            LIMIT 5;
+            LIMIT $3;
             """,
             namespace,
             vec_str,
+            sem_lim,
         )
 
         # 2. Top procedures
@@ -65,10 +76,11 @@ async def prefetch_relevant_context(
             FROM procedural_memories
             WHERE namespace = $1 AND is_active = TRUE
             ORDER BY (trigger_embedding <=> $2::vector(768)) ASC
-            LIMIT 3;
+            LIMIT $3;
             """,
             namespace,
             vec_str,
+            proc_lim,
         )
 
         # 3. Top entity nodes
@@ -76,13 +88,29 @@ async def prefetch_relevant_context(
             """
             SELECT name, entity_type, summary
             FROM entity_nodes
-            WHERE namespace = $1
+            WHERE namespace = $1 AND is_active = TRUE
             ORDER BY (embedding <=> $2::vector(768)) ASC
-            LIMIT 5;
+            LIMIT $3;
             """,
             namespace,
             vec_str,
+            ent_lim,
         )
+
+    return {
+        "existing_semantic_memories": [
+            {"id": str(r["memory_id"]), "summary": r["summary"], "tags": r["tags"]}
+            for r in sem_rows
+        ],
+        "existing_procedures": [
+            {"name": r["name"], "trigger": r["trigger_condition"], "steps": r["steps"]}
+            for r in proc_rows
+        ],
+        "existing_entities": [
+            {"name": r["name"], "type": r["entity_type"], "summary": r["summary"]}
+            for r in ent_rows
+        ],
+    }
 
     return {
         "existing_semantic_memories": [
@@ -119,6 +147,7 @@ async def fallback_deterministic_ingest(
     namespace: str,
     source_id: Optional[str] = None,
     embedding: Optional[List[float]] = None,
+    ttl_seconds: Optional[int] = None,
 ) -> IngestResponse:
     """Zero-LLM fallback: stores raw_text directly as a semantic memory item."""
     logger.info("Using deterministic fallback storage for ingest.")
@@ -128,6 +157,7 @@ async def fallback_deterministic_ingest(
         payload={"raw_fallback": True},
         source_id=source_id,
         embedding=embedding,
+        ttl_seconds=ttl_seconds,
     )
     return IngestResponse(
         success=True,
@@ -139,30 +169,184 @@ async def fallback_deterministic_ingest(
     )
 
 
+async def execute_plan(
+    plan: MemoryExtractionPlan,
+    namespace: str,
+    source_id: Optional[str] = None,
+    mode: str = "llm_decision",
+    contradiction_threshold: Optional[float] = None,
+    ttl_seconds: Optional[int] = None,
+) -> IngestResponse:
+    """Executes a validated 4-pillar extraction plan atomically in Neon Postgres."""
+    pool = await get_db_pool()
+    created_ids: List[str] = []
+    superseded_ids: List[str] = []
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # 1. Semantic operations
+            for sem in plan.semantic_ops:
+                if sem.action == "IGNORE":
+                    continue
+                new_id, sup_id = await add_or_supersede_semantic(
+                    summary=sem.summary,
+                    namespace=namespace,
+                    tags=sem.tags,
+                    confidence=sem.confidence,
+                    source_id=source_id,
+                    supersede_memory_id=sem.supersede_memory_id if sem.action == "SUPERSEDE" else None,
+                    contradiction_threshold=contradiction_threshold,
+                    ttl_seconds=ttl_seconds,
+                    conn=conn,
+                )
+                created_ids.append(new_id)
+                if sup_id:
+                    superseded_ids.append(sup_id)
+
+            # 2. Episodic operations
+            for ep in plan.episodic_ops:
+                ep_id = await record_episode(
+                    summary=ep.summary,
+                    situation=ep.situation,
+                    action_taken=ep.action_taken,
+                    outcome=ep.outcome,
+                    success=ep.success,
+                    namespace=namespace,
+                    tags=ep.tags,
+                    source_id=source_id,
+                    ttl_seconds=ttl_seconds,
+                    conn=conn,
+                )
+                created_ids.append(ep_id)
+
+            # 3. Procedural operations
+            for proc in plan.procedural_ops:
+                proc_id = await upsert_procedure(
+                    name=proc.name,
+                    description=proc.description,
+                    trigger_condition=proc.trigger_condition,
+                    steps=proc.steps,
+                    prerequisites=proc.prerequisites,
+                    namespace=namespace,
+                    reason_for_change=proc.reason_for_change,
+                    conn=conn,
+                )
+                created_ids.append(proc_id)
+
+            # 4. Entity Graph operations
+            for ent in plan.entity_ops:
+                edge_id = await upsert_entity_link(
+                    source_name=ent.source_name,
+                    source_type=ent.source_type,
+                    source_summary=ent.source_summary,
+                    relation_type=ent.relation_type,
+                    target_name=ent.target_name,
+                    target_type=ent.target_type,
+                    target_summary=ent.target_summary,
+                    fact_summary=ent.fact_summary,
+                    invalidate_conflicting_relations=ent.invalidate_conflicting_relations,
+                    namespace=namespace,
+                    conn=conn,
+                )
+                created_ids.append(edge_id)
+
+    return IngestResponse(
+        success=True,
+        namespace=namespace,
+        fast_mode=False,
+        created_ids=created_ids,
+        superseded_ids=superseded_ids,
+        details={
+            "mode": mode,
+            "semantic_count": len(plan.semantic_ops),
+            "episodic_count": len(plan.episodic_ops),
+            "procedural_count": len(plan.procedural_ops),
+            "entity_count": len(plan.entity_ops),
+        },
+    )
+
+
 async def process_and_ingest(
     raw_text: str,
     namespace: str = "default",
     fast_mode: bool = False,
     source_id: Optional[str] = None,
+    contradiction_threshold: Optional[float] = None,
+    use_decision_model: Optional[bool] = None,
+    ttl_seconds: Optional[int] = None,
 ) -> IngestResponse:
-    """Routes incoming raw text across the 4 memory pillars using a Small Decision LLM,
-    or falls back cleanly to deterministic storage."""
+    """Routes incoming raw text across the 4 memory pillars using Laya Decision Engine
+    and the Small Decision LLM, with graceful deterministic fallback."""
     embedder = LocalEmbedder.get_instance()
-    raw_embedding = embedder.embed_one(raw_text)
+    raw_embedding = await embedder.embed_one(raw_text)
 
-    if fast_mode or not settings.memory_llm_enabled:
+    if fast_mode:
         return await fallback_deterministic_ingest(
             raw_text=raw_text,
             namespace=namespace,
             source_id=source_id,
             embedding=raw_embedding,
+            ttl_seconds=ttl_seconds,
         )
 
-    try:
-        # Step 1: Prefetch similar memories
-        context_data = await prefetch_relevant_context(raw_text, raw_embedding, namespace)
+    # Step 1: Prefetch similar memories for context
+    context_data = await prefetch_relevant_context(raw_text, raw_embedding, namespace)
 
-        # Step 2: Call Small LLM
+    # Step 2: Evaluate with Laya Decision Model if enabled
+    decision_enabled = (
+        use_decision_model
+        if use_decision_model is not None
+        else settings.laya_enabled
+    )
+
+    if decision_enabled:
+        try:
+            decision = laya_engine.evaluate(
+                raw_text=raw_text,
+                raw_embedding=raw_embedding,
+                context_data=context_data,
+                contradiction_threshold=contradiction_threshold,
+            )
+            # If Laya classifies as simple, execute plan directly (Zero-LLM fast path)
+            if decision.complexity == "simple" and decision.extraction_plan:
+                logger.info(
+                    f"Laya Decision Model routing directly to {decision.primary_pillar} (confidence: {decision.confidence:.2f})"
+                )
+                res = await execute_plan(
+                    plan=decision.extraction_plan,
+                    namespace=namespace,
+                    source_id=source_id,
+                    mode="laya_decision",
+                    contradiction_threshold=contradiction_threshold,
+                    ttl_seconds=ttl_seconds,
+                )
+                res.details["laya_primary_pillar"] = decision.primary_pillar
+                res.details["laya_confidence"] = decision.confidence
+                return res
+        except Exception as laya_exc:
+            logger.warning(f"Laya Decision Model evaluation warning ({laya_exc}). Continuing to LLM path.")
+
+    # Step 3: If LLM is disabled, use Laya extraction plan or fallback
+    if not settings.memory_llm_enabled:
+        if decision_enabled and decision and decision.extraction_plan:
+            return await execute_plan(
+                plan=decision.extraction_plan,
+                namespace=namespace,
+                source_id=source_id,
+                mode="laya_zero_llm_fallback",
+                contradiction_threshold=contradiction_threshold,
+                ttl_seconds=ttl_seconds,
+            )
+        return await fallback_deterministic_ingest(
+            raw_text=raw_text,
+            namespace=namespace,
+            source_id=source_id,
+            embedding=raw_embedding,
+            ttl_seconds=ttl_seconds,
+        )
+
+    # Step 4: Complex multi-pillar path handled via Small Decision LLM
+    try:
         client = get_llm_client()
         user_prompt = f"""EXISTING_SIMILAR_MEMORIES:
 {json.dumps(context_data, indent=2)}
@@ -192,102 +376,37 @@ NEW_RAW_INPUT:
             and not plan.entity_ops
         ):
             return await fallback_deterministic_ingest(
-                raw_text, namespace, source_id, raw_embedding
+                raw_text, namespace, source_id, raw_embedding, ttl_seconds=ttl_seconds
             )
 
-        # Step 3: Execute plan across the 4 pillars in Neon Postgres
-        pool = await get_db_pool()
-        created_ids: List[str] = []
-        superseded_ids: List[str] = []
-
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                # 3.1 Semantic operations
-                for sem in plan.semantic_ops:
-                    if sem.action == "IGNORE":
-                        continue
-                    new_id, sup_id = await add_or_supersede_semantic(
-                        summary=sem.summary,
-                        namespace=namespace,
-                        tags=sem.tags,
-                        confidence=sem.confidence,
-                        source_id=source_id,
-                        supersede_memory_id=sem.supersede_memory_id if sem.action == "SUPERSEDE" else None,
-                        conn=conn,
-                    )
-                    created_ids.append(new_id)
-                    if sup_id:
-                        superseded_ids.append(sup_id)
-
-                # 3.2 Episodic operations
-                for ep in plan.episodic_ops:
-                    ep_id = await record_episode(
-                        summary=ep.summary,
-                        situation=ep.situation,
-                        action_taken=ep.action_taken,
-                        outcome=ep.outcome,
-                        success=ep.success,
-                        namespace=namespace,
-                        tags=ep.tags,
-                        source_id=source_id,
-                        conn=conn,
-                    )
-                    created_ids.append(ep_id)
-
-                # 3.3 Procedural operations
-                for proc in plan.procedural_ops:
-                    proc_id = await upsert_procedure(
-                        name=proc.name,
-                        description=proc.description,
-                        trigger_condition=proc.trigger_condition,
-                        steps=proc.steps,
-                        prerequisites=proc.prerequisites,
-                        namespace=namespace,
-                        reason_for_change=proc.reason_for_change,
-                        conn=conn,
-                    )
-                    created_ids.append(proc_id)
-
-                # 3.4 Entity Graph operations
-                for ent in plan.entity_ops:
-                    edge_id = await upsert_entity_link(
-                        source_name=ent.source_name,
-                        source_type=ent.source_type,
-                        source_summary=ent.source_summary,
-                        relation_type=ent.relation_type,
-                        target_name=ent.target_name,
-                        target_type=ent.target_type,
-                        target_summary=ent.target_summary,
-                        fact_summary=ent.fact_summary,
-                        invalidate_conflicting_relations=ent.invalidate_conflicting_relations,
-                        namespace=namespace,
-                        conn=conn,
-                    )
-                    created_ids.append(edge_id)
-
-        return IngestResponse(
-            success=True,
+        return await execute_plan(
+            plan=plan,
             namespace=namespace,
-            fast_mode=False,
-            created_ids=created_ids,
-            superseded_ids=superseded_ids,
-            details={
-                "semantic_count": len(plan.semantic_ops),
-                "episodic_count": len(plan.episodic_ops),
-                "procedural_count": len(plan.procedural_ops),
-                "entity_count": len(plan.entity_ops),
-            },
+            source_id=source_id,
+            mode="small_llm",
+            contradiction_threshold=contradiction_threshold,
+            ttl_seconds=ttl_seconds,
         )
 
     except Exception as exc:
         logger.warning(
-            f"Memory LLM processing failed or timed out ({exc}). Engaging deterministic fallback."
+            f"Memory LLM processing failed or timed out ({exc}). Engaging Laya/deterministic fallback."
         )
+        if decision_enabled and 'decision' in locals() and decision and decision.extraction_plan:
+            return await execute_plan(
+                plan=decision.extraction_plan,
+                namespace=namespace,
+                source_id=source_id,
+                mode="laya_resilient_fallback",
+                contradiction_threshold=contradiction_threshold,
+                ttl_seconds=ttl_seconds,
+            )
         return await fallback_deterministic_ingest(
             raw_text=raw_text,
             namespace=namespace,
             source_id=source_id,
             embedding=raw_embedding,
+            ttl_seconds=ttl_seconds,
         )
 
 
@@ -322,3 +441,36 @@ Failure Reason / Error: {failure_reason}
     except Exception as exc:
         logger.warning(f"Procedure patching via LLM failed ({exc}).")
         return None
+
+
+async def distill_episodes_with_llm(
+    episodes: List[Dict[str, Any]],
+) -> MemoryDistillationPlan:
+    """Uses the Small Decision LLM to consolidate and distill expiring episodic memories
+    into permanent procedural runbooks and semantic facts before hard deletion."""
+    if not settings.memory_llm_enabled or not episodes:
+        return MemoryDistillationPlan(has_durable_knowledge=False)
+
+    try:
+        client = get_llm_client()
+        episodes_context = json.dumps(episodes, indent=2)
+        user_prompt = f"""EXPIRING_EPISODES:
+{episodes_context}
+
+Analyze these episodes. Extract any reusable runbooks (procedures) or durable facts (semantic), or flag as disposable noise.
+"""
+        response = await client.chat.completions.create(
+            model=settings.memory_llm_model,
+            messages=[
+                {"role": "system", "content": DISTILLATION_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+        )
+        content = response.choices[0].message.content or "{}"
+        parsed = clean_and_parse_json(content)
+        return MemoryDistillationPlan.model_validate(parsed)
+    except Exception as exc:
+        logger.warning(f"Cognitive episodic distillation via LLM failed ({exc}).")
+        return MemoryDistillationPlan(has_durable_knowledge=False)

@@ -26,6 +26,7 @@ from strata.config import settings
 logger = logging.getLogger("strata.db")
 
 _pool: Optional[asyncpg.Pool] = None
+_pool_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 def normalize_dsn(dsn: str) -> str:
@@ -65,8 +66,13 @@ async def init_connection(conn: asyncpg.Connection) -> None:
 
 async def get_db_pool() -> asyncpg.Pool:
     """Returns the singleton asyncpg connection pool optimized for Neon Serverless."""
-    global _pool
-    if _pool is None:
+    global _pool, _pool_loop
+    try:
+        curr_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        curr_loop = None
+
+    if _pool is None or _pool_loop != curr_loop or (hasattr(_pool, "_loop") and _pool._loop.is_closed()):
         dsn = normalize_dsn(settings.database_url)
         logger.info("Initializing asyncpg pool for Neon Postgres...")
 
@@ -80,16 +86,21 @@ async def get_db_pool() -> asyncpg.Pool:
             init=init_connection,
             command_timeout=30.0,
         )
+        _pool_loop = curr_loop
         logger.info("Neon database connection pool established.")
     return _pool
 
 
 async def close_db_pool() -> None:
     """Closes the connection pool."""
-    global _pool
+    global _pool, _pool_loop
     if _pool is not None:
-        await _pool.close()
+        try:
+            await _pool.close()
+        except Exception:
+            pass
         _pool = None
+        _pool_loop = None
         logger.info("Neon database connection pool closed.")
 
 

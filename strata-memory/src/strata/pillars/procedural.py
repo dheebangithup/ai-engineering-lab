@@ -24,7 +24,7 @@ async def upsert_procedure(
 
     if embedding is None:
         embed_input = f"{name}: {trigger_condition} - {description}"
-        embedding = embedder.embed_one(embed_input)
+        embedding = await embedder.embed_one(embed_input)
     vec_str = embedder.to_pgvector_str(embedding)
 
     pool = await get_db_pool() if conn is None else None

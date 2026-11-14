@@ -7,6 +7,7 @@ from strata.config import settings
 from strata.db import get_db_pool
 from strata.llm_processor.prompts import EDIT_INSTRUCTION_PROMPT
 from strata.llm_processor.router import (
+    distill_episodes_with_llm,
     get_llm_client,
     patch_procedure_with_llm,
     process_and_ingest,
@@ -17,6 +18,10 @@ from strata.models import (
     FeedbackRequest,
     IngestRequest,
     IngestResponse,
+    PruneRequest,
+    PruneResponse,
+    PurgeNamespaceRequest,
+    PurgeNamespaceResponse,
     RecallRequest,
     RecallResponse,
     StoreExplicitRequest,
@@ -49,13 +54,19 @@ async def svc_memory_ingest(
     namespace: str = "default",
     fast_mode: bool = False,
     source_id: Optional[str] = None,
+    contradiction_threshold: Optional[float] = None,
+    use_decision_model: Optional[bool] = None,
+    ttl_seconds: Optional[int] = None,
 ) -> IngestResponse:
-    """Autonomous 4-pillar extraction & storage using the Memory-Side Small LLM."""
+    """Autonomous 4-pillar extraction & storage using Laya Decision Engine and Small LLM."""
     return await process_and_ingest(
         raw_text=raw_text,
         namespace=namespace,
         fast_mode=fast_mode,
         source_id=source_id,
+        contradiction_threshold=contradiction_threshold,
+        use_decision_model=use_decision_model,
+        ttl_seconds=ttl_seconds,
     )
 
 
@@ -65,6 +76,9 @@ async def svc_memory_recall(
     pillars: Optional[List[str]] = None,
     top_k: int = 5,
     token_budget: int = 1500,
+    match_threshold: Optional[float] = None,
+    min_score: Optional[float] = None,
+    similarity_threshold: Optional[float] = None,
 ) -> RecallResponse:
     """Zero-LLM deterministic hybrid RRF + graph + procedural retrieval."""
     if pillars is None:
@@ -75,6 +89,9 @@ async def svc_memory_recall(
         pillars=pillars,
         top_k=top_k,
         token_budget=token_budget,
+        match_threshold=match_threshold,
+        min_score=min_score,
+        similarity_threshold=similarity_threshold,
     )
     return await memory_recall_internal(req)
 
@@ -83,8 +100,11 @@ async def svc_memory_store_explicit(
     pillar: Literal["semantic", "episodic", "procedural", "entity"],
     payload: Dict[str, Any],
     namespace: str = "default",
+    ttl_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Direct, zero-LLM structured write to any of the 4 pillars."""
+    """Direct, zero-LLM structured write to any of the 4 pillars with optional TTL."""
+    effective_ttl = ttl_seconds if ttl_seconds is not None else payload.get("ttl_seconds")
+
     if pillar == "semantic":
         mem_id, superseded_id = await add_or_supersede_semantic(
             summary=payload.get("summary", ""),
@@ -94,6 +114,7 @@ async def svc_memory_store_explicit(
             confidence=float(payload.get("confidence", 1.0)),
             source_id=payload.get("source_id"),
             supersede_memory_id=payload.get("supersede_memory_id"),
+            ttl_seconds=effective_ttl,
         )
         return {"status": "stored", "pillar": "semantic", "memory_id": mem_id, "superseded_id": superseded_id}
 
@@ -108,6 +129,7 @@ async def svc_memory_store_explicit(
             tags=payload.get("tags", []),
             extra_payload=payload.get("extra_payload"),
             source_id=payload.get("source_id"),
+            ttl_seconds=effective_ttl,
         )
         return {"status": "stored", "pillar": "episodic", "memory_id": ep_id}
 
@@ -374,3 +396,198 @@ async def svc_memory_delete(
         "target_id": target_id,
         "hard_delete": hard_delete,
     }
+
+
+async def svc_memory_prune(
+    namespace: str = "default",
+    distill_episodes: bool = True,
+    episodic_older_than_days: Optional[int] = 30,
+    superseded_older_than_days: int = 90,
+    retire_toxic_threshold: Optional[int] = -5,
+    batch_size: int = 20,
+) -> PruneResponse:
+    """Safely consolidates and prunes stale memories:
+    1. Retires toxic memories (utility_score <= threshold) by soft-invalidating them.
+    2. Gathers soft-expired or old episodic memories, invokes Cognitive Distillation
+       via Small LLM to synthesize durable runbooks or semantic facts, then purges the raw episodes.
+    3. Physically purges superseded/soft-deleted rows older than superseded_older_than_days."""
+    pool = await get_db_pool()
+
+    toxic_retired = 0
+    distilled_facts_count = 0
+    distilled_procedures_count = 0
+    episodes_pruned_count = 0
+    superseded_pruned_count = 0
+    distillation_summary = ""
+
+    async with pool.acquire() as conn:
+        # Step 1: Auto-retire toxic memories
+        if retire_toxic_threshold is not None:
+            res_toxic = await conn.execute(
+                """
+                UPDATE memories
+                SET valid_until = NOW()
+                WHERE namespace = $1
+                  AND utility_score <= $2
+                  AND (valid_until IS NULL OR valid_until > NOW());
+                """,
+                namespace,
+                retire_toxic_threshold,
+            )
+            try:
+                toxic_retired = int(res_toxic.split(" ")[1])
+            except (IndexError, ValueError):
+                toxic_retired = 0
+
+        # Step 2: Cognitive Distillation of Expiring Episodes
+        fetch_episodes_sql = """
+            SELECT memory_id, summary, payload, tags, utility_score, created_at
+            FROM memories
+            WHERE namespace = $1
+              AND type = 'episodic'
+              AND (
+                  (valid_until IS NOT NULL AND valid_until <= NOW())
+                  OR ($2::int IS NOT NULL AND created_at < NOW() - ($2::int || ' days')::INTERVAL)
+              )
+            ORDER BY created_at ASC
+            LIMIT $3;
+        """
+        exp_rows = await conn.fetch(fetch_episodes_sql, namespace, episodic_older_than_days, batch_size)
+
+        if exp_rows:
+            ep_ids = [r["memory_id"] for r in exp_rows]
+            ep_contexts = []
+            for r in exp_rows:
+                pl = r["payload"] if isinstance(r["payload"], dict) else {}
+                ep_contexts.append({
+                    "id": str(r["memory_id"]),
+                    "summary": r["summary"],
+                    "situation": pl.get("situation", ""),
+                    "action_taken": pl.get("action_taken", ""),
+                    "outcome": pl.get("outcome", ""),
+                    "success": pl.get("success", True),
+                    "tags": r["tags"],
+                })
+
+            if distill_episodes:
+                distillation_plan = await distill_episodes_with_llm(ep_contexts)
+                distillation_summary = distillation_plan.reasoning
+
+                if distillation_plan.has_durable_knowledge:
+                    # Ingest distilled semantic facts
+                    for fact in distillation_plan.semantic_facts:
+                        await add_or_supersede_semantic(
+                            summary=fact.summary,
+                            namespace=namespace,
+                            tags=list(set(fact.tags + ["distilled_from_episodic"])),
+                            confidence=fact.confidence,
+                            source_id="cognitive_distillation",
+                            conn=conn,
+                        )
+                        distilled_facts_count += 1
+
+                    # Ingest or evolve procedural runbooks
+                    for proc in distillation_plan.procedures:
+                        await upsert_procedure(
+                            name=proc.name,
+                            description=proc.description,
+                            trigger_condition=proc.trigger_condition,
+                            steps=proc.steps,
+                            namespace=namespace,
+                            reason_for_change="Synthesized from episodic experiences via Cognitive Distillation",
+                            conn=conn,
+                        )
+                        distilled_procedures_count += 1
+
+            # Once distilled (or if distillation bypassed), safely delete these raw episodic rows
+            del_ep_res = await conn.execute(
+                "DELETE FROM memories WHERE memory_id = ANY($1::uuid[]) AND namespace = $2",
+                ep_ids,
+                namespace,
+            )
+            try:
+                episodes_pruned_count = int(del_ep_res.split(" ")[1])
+            except (IndexError, ValueError):
+                episodes_pruned_count = len(ep_ids)
+
+        # Step 3: Physically purge superseded/soft-deleted rows older than retention threshold
+        del_sup_mem = await conn.execute(
+            """
+            DELETE FROM memories
+            WHERE namespace = $1
+              AND valid_until IS NOT NULL
+              AND valid_until < NOW() - ($2::int || ' days')::INTERVAL;
+            """,
+            namespace,
+            superseded_older_than_days,
+        )
+        try:
+            mem_purged = int(del_sup_mem.split(" ")[1])
+        except (IndexError, ValueError):
+            mem_purged = 0
+
+        del_sup_edges = await conn.execute(
+            """
+            DELETE FROM entity_edges
+            WHERE namespace = $1
+              AND valid_until IS NOT NULL
+              AND valid_until < NOW() - ($2::int || ' days')::INTERVAL;
+            """,
+            namespace,
+            superseded_older_than_days,
+        )
+        try:
+            edge_purged = int(del_sup_edges.split(" ")[1])
+        except (IndexError, ValueError):
+            edge_purged = 0
+
+        superseded_pruned_count = mem_purged + edge_purged
+
+    return PruneResponse(
+        namespace=namespace,
+        distilled_facts_created=distilled_facts_count,
+        distilled_procedures_created=distilled_procedures_count,
+        episodes_pruned=episodes_pruned_count,
+        superseded_pruned=superseded_pruned_count,
+        toxic_memories_retired=toxic_retired,
+        details={
+            "distillation_summary": distillation_summary,
+            "superseded_memories_purged": mem_purged,
+            "superseded_edges_purged": edge_purged,
+        },
+    )
+
+
+async def svc_memory_purge_namespace(
+    namespace: str,
+    confirm: bool = False,
+) -> PurgeNamespaceResponse:
+    """Completely purges all data within a specified namespace (GDPR / reset compliance)."""
+    if not confirm:
+        return PurgeNamespaceResponse(
+            namespace=namespace,
+            purged=False,
+            deleted_counts={"error": "confirm must be set to True to execute namespace purge"},
+        )
+
+    pool = await get_db_pool()
+    counts = {}
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            res_mem = await conn.execute("DELETE FROM memories WHERE namespace = $1", namespace)
+            counts["memories"] = int(res_mem.split(" ")[1]) if " " in res_mem else 0
+
+            res_proc = await conn.execute("DELETE FROM procedural_memories WHERE namespace = $1", namespace)
+            counts["procedural"] = int(res_proc.split(" ")[1]) if " " in res_proc else 0
+
+            res_edges = await conn.execute("DELETE FROM entity_edges WHERE namespace = $1", namespace)
+            counts["entity_edges"] = int(res_edges.split(" ")[1]) if " " in res_edges else 0
+
+            res_nodes = await conn.execute("DELETE FROM entity_nodes WHERE namespace = $1", namespace)
+            counts["entity_nodes"] = int(res_nodes.split(" ")[1]) if " " in res_nodes else 0
+
+    return PurgeNamespaceResponse(
+        namespace=namespace,
+        purged=True,
+        deleted_counts=counts,
+    )

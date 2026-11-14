@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 import asyncpg
+from strata.config import settings
 from strata.db import get_db_pool
 from strata.embedder import LocalEmbedder
 
@@ -16,9 +17,10 @@ async def record_episode(
     extra_payload: Optional[Dict[str, Any]] = None,
     source_id: Optional[str] = None,
     embedding: Optional[List[float]] = None,
+    ttl_seconds: Optional[int] = None,
     conn: Optional[asyncpg.Connection] = None,
 ) -> str:
-    """Records an immutable episodic trace into the memories table."""
+    """Records an episodic trace into the memories table with configurable retention/TTL."""
     tags = tags or []
     payload: Dict[str, Any] = {
         "situation": situation or "",
@@ -29,11 +31,16 @@ async def record_episode(
     if extra_payload:
         payload.update(extra_payload)
 
+    # If ttl_seconds is not explicitly passed, apply default episodic retention window if configured
+    effective_ttl = ttl_seconds
+    if effective_ttl is None and settings.episodic_default_ttl_days is not None:
+        effective_ttl = int(settings.episodic_default_ttl_days * 86400)
+
     embedder = LocalEmbedder.get_instance()
     if embedding is None:
         # Build embedding from combined context for maximum semantic retrieval power
         embed_input = f"{summary} Situation: {situation or ''} Action: {action_taken or ''} Outcome: {outcome or ''}"
-        embedding = embedder.embed_one(embed_input)
+        embedding = await embedder.embed_one(embed_input)
     vec_str = embedder.to_pgvector_str(embedding)
 
     pool = await get_db_pool() if conn is None else None
@@ -42,9 +49,12 @@ async def record_episode(
         insert_sql = """
             INSERT INTO memories (
                 namespace, type, summary, payload, tags, embedding,
-                confidence, utility_score, access_count, source_id, valid_from
+                confidence, utility_score, access_count, source_id, valid_from, valid_until
             )
-            VALUES ($1, 'episodic', $2, $3, $4, $5::vector(768), 1.0, 0, 0, $6, NOW())
+            VALUES (
+                $1, 'episodic', $2, $3, $4, $5::vector(768), 1.0, 0, 0, $6, NOW(),
+                CASE WHEN $7::int IS NOT NULL THEN NOW() + ($7::int || ' seconds')::INTERVAL ELSE NULL END
+            )
             RETURNING memory_id;
         """
         row = await c.fetchrow(
@@ -55,6 +65,7 @@ async def record_episode(
             tags,
             vec_str,
             source_id,
+            effective_ttl,
         )
         return str(row["memory_id"])
 
@@ -131,7 +142,7 @@ async def delete_episodic(
             )
         else:
             res = await c.execute(
-                "UPDATE memories SET valid_until = NOW() WHERE memory_id = $1 AND namespace = $2 AND type = 'episodic' AND valid_until IS NULL",
+                "UPDATE memories SET valid_until = NOW() WHERE memory_id = $1 AND namespace = $2 AND type = 'episodic' AND (valid_until IS NULL OR valid_until > NOW())",
                 mem_uuid,
                 namespace,
             )

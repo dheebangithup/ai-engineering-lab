@@ -1,8 +1,9 @@
 import asyncio
 import logging
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
+from strata.config import settings
 from strata.db import get_db_pool
 from strata.embedder import LocalEmbedder
 from strata.models import (
@@ -25,10 +26,16 @@ async def execute_hybrid_search(
     namespace: str,
     target_types: List[str],
     top_k: int,
+    match_threshold: Optional[float] = None,
 ) -> List[dict]:
     """Calls hybrid_memory_search SQL function in Neon Postgres."""
     pool = await get_db_pool()
     vec_str = LocalEmbedder.to_pgvector_str(query_embedding)
+    thresh = (
+        match_threshold
+        if match_threshold is not None
+        else settings.recall_match_threshold
+    )
 
     async with pool.acquire() as c:
         rows = await c.fetch(
@@ -48,14 +55,15 @@ async def execute_hybrid_search(
                 $2::vector(768),
                 $3,
                 $4,
-                0.35,
-                $5
+                $5,
+                $6
             );
             """,
             query_text,
             vec_str,
             namespace,
             target_types,
+            thresh,
             top_k * 2,
         )
         return [dict(r) for r in rows]
@@ -149,7 +157,7 @@ def build_xml_context(
 async def memory_recall_internal(req: RecallRequest) -> RecallResponse:
     """Executes deterministic recall across requested pillars in a single round trip."""
     embedder = LocalEmbedder.get_instance()
-    query_embedding = embedder.embed_one(req.query)
+    query_embedding = await embedder.embed_one(req.query)
 
     pillars = set(req.pillars)
     tasks = []
@@ -170,6 +178,7 @@ async def memory_recall_internal(req: RecallRequest) -> RecallResponse:
             namespace=req.namespace,
             target_types=hybrid_types,
             top_k=req.top_k,
+            match_threshold=req.match_threshold,
         )
 
     # 2. Procedural search
@@ -191,6 +200,7 @@ async def memory_recall_internal(req: RecallRequest) -> RecallResponse:
             query_text=req.query,
             namespace=req.namespace,
             top_k=req.top_k,
+            similarity_threshold=req.similarity_threshold,
         )
 
     hybrid_res, procedural_res, entity_res = await asyncio.gather(
@@ -242,6 +252,15 @@ async def memory_recall_internal(req: RecallRequest) -> RecallResponse:
     episodic_items.sort(key=lambda x: x.rrf_score, reverse=True)
     procedural_items = procedural_res[:req.top_k]
     entity_items = entity_res[:req.top_k]
+
+    # Optional dynamic min_score filter
+    min_score = (
+        req.min_score if req.min_score is not None else settings.recall_min_score
+    )
+    if min_score > 0.0:
+        semantic_items = [s for s in semantic_items if s.rrf_score >= min_score]
+        episodic_items = [e for e in episodic_items if e.rrf_score >= min_score]
+        procedural_items = [p for p in procedural_items if p.composite_score >= min_score]
 
     # Asynchronously bump access counts
     asyncio.create_task(bump_access_counts(retrieved_memory_uuids))

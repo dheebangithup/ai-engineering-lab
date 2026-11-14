@@ -13,6 +13,7 @@ import json
 from strata.service import (
     svc_memory_feedback,
     svc_memory_ingest,
+    svc_memory_purge_namespace,
     svc_memory_recall,
     svc_memory_store_explicit,
 )
@@ -123,6 +124,13 @@ async def main():
         fast_mode=True,  # deterministic fast mode
     )
     print(f"  ✓ Ingest result: {ingest_res.model_dump_json(indent=2)}")
+
+    # ------------------------------------------------------------------------
+    # Step 5: Database Cleanup (Leave pristine clean slate)
+    # ------------------------------------------------------------------------
+    print("\n[5] Cleaning up demo namespace from database...")
+    purge_res = await svc_memory_purge_namespace(namespace=namespace, confirm=True)
+    print(f"  ✓ Clean slate confirmed: purged {purge_res.deleted_counts}")
 
     await close_db_pool()
     print("\n" + "=" * 70)
