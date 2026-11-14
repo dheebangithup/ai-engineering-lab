@@ -21,7 +21,7 @@ class StrataSettings(BaseSettings):
     memory_llm_base_url: str = "http://localhost:11434/v1"
     memory_llm_api_key: str = "ollama"
     memory_llm_model: str = "qwen2.5:3b-instruct"
-    memory_llm_timeout_seconds: float = 120.0
+    memory_llm_timeout_seconds: float = 240.0
 
     # Dynamic Recall Tuning & Limits
     recall_match_threshold: float = 0.35  # Vector similarity cutoff in hybrid_memory_search

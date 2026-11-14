@@ -18,7 +18,7 @@ Your task is to analyze NEW_RAW_INPUT alongside EXISTING_SIMILAR_MEMORIES and de
    - Extract source_name, source_type, relation_type (UPPER_SNAKE_CASE, e.g. USES, BUILDS, DEPLOYED_ON, MAINTAINS), target_name, target_type, fact_summary.
    - Set invalidate_conflicting_relations=true if this new relation replaces a prior state.
 
-Respond ONLY with a JSON object conforming exactly to this structure:
+Do not output thinking tags or conversational text. Respond IMMEDIATELY with a JSON object conforming exactly to this structure:
 {
   "semantic_ops": [
     {
@@ -110,7 +110,7 @@ Analyze the episodic memories and extract any durable, reusable intelligence bef
 3. Ignore Transient Chatter / Disposable Logs:
    - Routine greetings, simple queries, temporary status checks, or uninformative logs should NOT be saved.
 
-Respond ONLY with a JSON object conforming exactly to this structure:
+Do not output thinking tags or conversational text. Respond IMMEDIATELY with a JSON object conforming exactly to this structure:
 {
   "has_durable_knowledge": true,
   "semantic_facts": [
