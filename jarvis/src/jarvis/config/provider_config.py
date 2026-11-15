@@ -34,6 +34,11 @@ class ModelSpec(BaseModel):
     supports_vision: bool = Field(default=False)
     context_window: int = Field(default=8192)
 
+    @property
+    def is_decision_model(self) -> bool:
+        """True if model is configured as a dedicated Decision model."""
+        return ModelRole.DECISION in self.roles and ModelRole.REASONING not in self.roles and ModelRole.FAST not in self.roles
+
 
 class ProviderInstanceConfig(BaseModel):
     """Configuration for a specific provider instance."""

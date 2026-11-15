@@ -15,6 +15,7 @@ class BaseLLMProvider(ABC):
     def __init__(self, config: ProviderInstanceConfig):
         self.config = config
         self.provider_id = config.provider_id
+        self.name = config.name
         self.health = ProviderHealth(provider_id=self.provider_id)
 
     @abstractmethod
@@ -37,12 +38,38 @@ class BaseLLMProvider(ABC):
         """Check the status and responsiveness of the provider."""
         pass
 
+    async def classify_decision(
+        self,
+        query: str,
+        model_id: Optional[str] = None,
+        context: Optional[str] = None,
+    ) -> Optional[Any]:
+        """
+        Execute structured decision classification on this provider.
+        Decision models are specialized intent & complexity routers, not ordinary generative LLMs.
+        """
+        return None
+
     def resolve_model_for_role(self, role: ModelRole) -> Optional[str]:
         """Find the best-fitting configured model for this provider given a role."""
+        # 1. Exact match for requested role
         for m_id, spec in self.config.models.items():
             if role in spec.roles:
                 return spec.model_id
-        # Fallback to the first available model if any exists
+
+        # 2. If looking for generative roles (FAST/REASONING), avoid decision-only or embedding-only models
+        if role in (ModelRole.FAST, ModelRole.REASONING):
+            for m_id, spec in self.config.models.items():
+                if any(r in (ModelRole.FAST, ModelRole.REASONING) for r in spec.roles):
+                    return spec.model_id
+
+        # 3. If looking for DECISION, look for any model tagged with DECISION
+        if role == ModelRole.DECISION:
+            for m_id, spec in self.config.models.items():
+                if ModelRole.DECISION in spec.roles:
+                    return spec.model_id
+
+        # 4. Fallback to first available model if any exists
         if self.config.models:
             return next(iter(self.config.models.values())).model_id
         return None

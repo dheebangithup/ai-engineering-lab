@@ -130,7 +130,11 @@ def setup_logging(
         uv_logger.setLevel(level)
         uv_logger.propagate = True
 
-    # 7. Hook uncaught system exceptions
+    # 7. Silence noisy third-party HTTP transport loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    # 8. Hook uncaught system exceptions
     sys.excepthook = _uncaught_exception_handler
 
     _is_configured = True

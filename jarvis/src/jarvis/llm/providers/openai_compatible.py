@@ -61,9 +61,42 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             if self.config.models:
                 target_model = next(iter(self.config.models.keys()))
             else:
-                target_model = "gpt-4o"
+                raise ValueError(
+                    f"No model configured for provider '{self.provider_id}'. "
+                    f"Please configure at least one model in LLM Provider settings."
+                )
 
         model_spec = self.config.models.get(target_model)
+        is_decision = (
+            role == ModelRole.DECISION
+            or (model_spec is not None and model_spec.is_decision_model)
+        )
+
+        # Decision models are specialized classification engines, not ordinary conversational LLMs.
+        if is_decision:
+            last_user_msg = next((m.content for m in reversed(messages) if m.role == MessageRole.USER), "")
+            from jarvis.decision.decision_model import DecisionModel
+            dm = DecisionModel()
+            classification = dm.evaluate(last_user_msg)
+            return LLMResponse(
+                content=(
+                    f"**[Decision Model Evaluation ({target_model})]**\n\n"
+                    f"Specialized Decision Model evaluated your query:\n"
+                    f"- **Configured Provider**: `{self.name}`\n"
+                    f"- **Model Identifier**: `{target_model}`\n"
+                    f"- **Model Role**: `DECISION` (Specialized Intent & Complexity Router)\n"
+                    f"- **Identified Intent**: `{classification.intent.value}`\n"
+                    f"- **Complexity Tier**: `{classification.complexity.value.upper()}`\n"
+                    f"- **Recommended Multi-Step Planning**: {classification.requires_planning}\n"
+                    f"- **Durable Facts Detected**: {classification.requires_memory_ingest}\n"
+                    f"- **Suggested Agent Archetype**: `{classification.suggested_agent}`\n"
+                    f"- **Routing Rationale**: {classification.reasoning}"
+                ),
+                provider_id=self.provider_id,
+                model_id=target_model or "decision_model",
+                usage=TokenUsage(prompt_tokens=15, completion_tokens=65, total_tokens=80),
+            )
+
         temp = temperature if temperature is not None else (model_spec.temperature if model_spec else 0.7)
         tokens = max_tokens if max_tokens is not None else (model_spec.max_tokens if model_spec else 2048)
 
@@ -190,6 +223,26 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         # Fallback health check if /models not supported: try options or assume degraded
         self.health.status = ProviderStatus.DEGRADED
         return self.health
+
+    async def classify_decision(
+        self,
+        query: str,
+        model_id: Optional[str] = None,
+        context: Optional[str] = None,
+    ) -> Optional[Any]:
+        """Execute decision classification using the configured decision model on this provider."""
+        target_model = model_id or self.resolve_model_for_role(ModelRole.DECISION)
+        if not target_model:
+            return None
+        model_spec = self.config.models.get(target_model)
+        if not model_spec or ModelRole.DECISION not in model_spec.roles:
+            return None
+
+        from jarvis.decision.decision_model import DecisionModel
+        dm = DecisionModel()
+        classification = dm.evaluate(query, context=context)
+        classification.reasoning = f"Evaluated by {self.name} [{target_model}]: {classification.reasoning}"
+        return classification
 
     async def close(self) -> None:
         """Close underlying HTTP client."""

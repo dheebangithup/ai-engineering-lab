@@ -16,7 +16,7 @@ from jarvis.config.provider_config import (
 )
 from jarvis.config.settings import get_settings
 from jarvis.logger import get_logger
-from jarvis.workspace import default_workspace
+from jarvis.workspace import get_workspace
 
 logger = get_logger("config.provider_store")
 
@@ -26,16 +26,15 @@ class ProviderStore:
 
     def __init__(self, settings_file: Optional[Path] = None):
         if settings_file is None:
-            ws = default_workspace().initialize()
-            self.settings_file = ws.settings_dir / "providers.json"
+            self.settings_file = get_workspace().providers_config_path
         else:
             self.settings_file = Path(settings_file)
         
         self._config: Optional[ProviderRegistryConfig] = None
 
-    def load_config(self) -> ProviderRegistryConfig:
+    def load_config(self, force_reload: bool = False) -> ProviderRegistryConfig:
         """Load provider config from file, or initialize with seed defaults if not found."""
-        if self._config is not None:
+        if self._config is not None and not force_reload:
             return self._config
 
         if self.settings_file.exists():
@@ -64,13 +63,13 @@ class ProviderStore:
 
     def add_or_update_provider(self, provider: ProviderInstanceConfig) -> None:
         """Add or update a provider configuration at runtime."""
-        cfg = self.load_config()
+        cfg = self.load_config(force_reload=True)
         cfg.providers[provider.provider_id] = provider
         self.save_config(cfg)
 
     def remove_provider(self, provider_id: str) -> bool:
         """Remove a provider and clean up fallback chains."""
-        cfg = self.load_config()
+        cfg = self.load_config(force_reload=True)
         if provider_id not in cfg.providers:
             return False
 
@@ -85,7 +84,7 @@ class ProviderStore:
 
     def set_fallback_chain(self, role: ModelRole, provider_ids: List[str]) -> None:
         """Update the fallback chain order for a specific role."""
-        cfg = self.load_config()
+        cfg = self.load_config(force_reload=True)
         cfg.fallback_chains[role] = provider_ids
         self.save_config(cfg)
 
@@ -109,15 +108,20 @@ class ProviderStore:
                         roles=[ModelRole.DECISION],
                         max_tokens=1024,
                     ),
-                    "google/gemini-3.8-flash": ModelSpec(
-                        model_id="google/gemini-3.8-flash",
-                        roles=[ModelRole.FAST],
+                    "qwen/qwen3.8-flash": ModelSpec(
+                        model_id="qwen/qwen3.8-flash",
+                        roles=[ModelRole.FAST, ModelRole.DECISION],
                         max_tokens=4096,
                     ),
-                    "claude-sonnet-5": ModelSpec(
-                        model_id="claude-sonnet-5",
-                        roles=[ModelRole.REASONING],
+                    "gpt-6-luna": ModelSpec(
+                        model_id="gpt-6-luna",
+                        roles=[ModelRole.REASONING, ModelRole.FAST],
                         max_tokens=8192,
+                    ),
+                    "gpt-oss-120b": ModelSpec(
+                        model_id="gpt-oss-120b",
+                        roles=[ModelRole.REASONING, ModelRole.FAST],
+                        max_tokens=4096,
                     ),
                 },
                 enabled=bool(settings.kodekloud_api_key),
@@ -132,9 +136,16 @@ class ProviderStore:
             api_key=settings.ollama_api_key,
             priority=20,
             models={
+                "laya:latest": ModelSpec(
+                    model_id="laya:latest",
+                    roles=[ModelRole.DECISION],
+                    max_tokens=512,
+                    context_window=512,
+                    supports_tools=False,
+                ),
                 "qwen3:8b": ModelSpec(
                     model_id="qwen3:8b",
-                    roles=[ModelRole.DECISION, ModelRole.FAST, ModelRole.REASONING],
+                    roles=[ModelRole.FAST, ModelRole.REASONING],
                     max_tokens=4096,
                 ),
                 "nomic-embed-text": ModelSpec(

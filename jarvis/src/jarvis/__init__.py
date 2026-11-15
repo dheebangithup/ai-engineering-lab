@@ -1,6 +1,12 @@
 from typing import Optional
 
-from jarvis.workspace import Workspace, default_workspace, initialize_workspace
+from jarvis.workspace import (
+    Workspace,
+    default_workspace,
+    get_workspace,
+    initialize_workspace,
+    set_active_workspace,
+)
 
 
 def initialize_app(workspace: Optional[Workspace] = None) -> Workspace:
@@ -17,7 +23,11 @@ def main() -> None:
 
 
 __all__ = [
+    "Workspace",
+    "get_workspace",
+    "set_active_workspace",
     "initialize_app",
     "initialize_workspace",
+    "default_workspace",
     "main",
 ]

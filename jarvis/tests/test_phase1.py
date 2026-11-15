@@ -215,3 +215,22 @@ async def test_decision_engine_llm_routing():
     assert classification.suggested_agent == "planning_agent"
     assert "filesystem" in classification.suggested_tool_categories or "memory" in classification.suggested_tool_categories
     assert classification.fast_path is True  # Sub-5ms Decision Model evaluation
+
+
+@pytest.mark.anyio
+async def test_decision_engine_durable_facts_detection():
+    """Verify that statements introducing personal identity or project facts flag requires_memory_ingest=True."""
+    mock_gateway = AsyncMock(spec=ProviderGateway)
+    engine = DecisionEngine(provider_gateway=mock_gateway)
+
+    # Personal identity
+    res = await engine.classify("My name is Theeban, I am an AI engineer")
+    assert res.requires_memory_ingest is True
+    assert res.requires_memory_recall is True
+    assert "memory" in res.suggested_tool_categories
+    assert "Theeban" in res.extracted_entities
+
+    # Technical / Project preference
+    res_pref = await engine.classify("I prefer PostgreSQL on Neon and Python 3.12")
+    assert res_pref.requires_memory_ingest is True
+    assert "memory" in res_pref.suggested_tool_categories

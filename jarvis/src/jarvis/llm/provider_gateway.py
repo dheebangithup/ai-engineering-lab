@@ -40,7 +40,7 @@ class ProviderGateway:
 
     def reload(self) -> None:
         """Reload configuration and refresh provider instances."""
-        self._config = self.store.load_config()
+        self._config = self.store.load_config(force_reload=True)
         self._providers.clear()
 
         for pid, p_cfg in self._config.providers.items():
@@ -94,6 +94,31 @@ class ProviderGateway:
                 active_chain = list(self._providers.keys())
 
         return active_chain
+
+    async def classify_decision(
+        self,
+        query: str,
+        context: Optional[str] = None,
+    ) -> Optional[Any]:
+        """
+        Execute structured decision classification across the configured DECISION fallback chain.
+        Decision models are specialized intent & complexity routers, not ordinary generative LLMs.
+        """
+        chain = self.get_fallback_chain_for_role(ModelRole.DECISION)
+        for pid in chain:
+            provider = self._providers.get(pid)
+            if not provider:
+                continue
+            decision_model = provider.resolve_model_for_role(ModelRole.DECISION)
+            if not decision_model:
+                continue
+            try:
+                result = await provider.classify_decision(query, model_id=decision_model, context=context)
+                if result is not None:
+                    return result
+            except Exception as e:
+                logger.warning(f"Decision model provider '{pid}' error: {e}. Falling back...")
+        return None
 
     async def complete(
         self,
@@ -172,6 +197,10 @@ class ProviderGateway:
             f"All providers in fallback chain failed for role '{role}'. "
             f"Chain: {chain}. Errors: {failover_history}"
         ) from last_error
+
+    def get_providers_health(self) -> Dict[str, ProviderHealth]:
+        """Return the current in-memory health status of registered providers without outbound network calls."""
+        return {pid: provider.health for pid, provider in self._providers.items()}
 
     async def check_all_providers_health(self) -> Dict[str, ProviderHealth]:
         """Perform health checks on all registered providers."""

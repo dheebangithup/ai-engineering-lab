@@ -12,7 +12,7 @@ from jarvis.config.settings import get_settings
 from jarvis.logger import get_logger
 from jarvis.mcp.schemas import MCPRegistryConfig, MCPServerConfig, MCPTransportType
 from jarvis.tools.schemas import PermissionTier
-from jarvis.workspace import default_workspace
+from jarvis.workspace import Workspace, get_workspace
 
 logger = get_logger("mcp.store")
 
@@ -22,8 +22,7 @@ class MCPStore:
 
     def __init__(self, settings_file: Optional[Path] = None):
         if settings_file is None:
-            ws = default_workspace().initialize()
-            self.settings_file = ws.settings_dir / "mcp_servers.json"
+            self.settings_file = get_workspace().mcp_config_path
         else:
             self.settings_file = Path(settings_file)
 
@@ -77,20 +76,24 @@ class MCPStore:
         """Seed default MCP configurations including Strata Cognitive Memory."""
         servers: Dict[str, MCPServerConfig] = {}
 
-        # Detect strata-mcp executable path
-        sibling_strata_dir = Path("/Users/dheeban/Documents/my_projects/ai-engineering-lab/strata-memory")
-        strata_mcp_bin = sibling_strata_dir / ".venv" / "bin" / "strata-mcp"
-        command = str(strata_mcp_bin) if strata_mcp_bin.exists() else "strata-mcp"
+        # Dynamically discover strata-memory sibling project without hardcoding
+        sibling_strata_dir = Workspace.get_sibling_project("strata-memory")
+        if sibling_strata_dir and sibling_strata_dir.exists():
+            strata_mcp_bin = sibling_strata_dir / ".venv" / "bin" / "strata-mcp"
+            command = str(strata_mcp_bin) if strata_mcp_bin.exists() else "strata-mcp"
+        else:
+            command = "strata-mcp"
 
         # Read env vars from sibling .env if available for initial seed
         strata_env: Dict[str, str] = {}
-        strata_dotenv = sibling_strata_dir / ".env"
-        if strata_dotenv.exists():
-            for line in strata_dotenv.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    strata_env[k.strip()] = v.strip().strip('"').strip("'")
+        if sibling_strata_dir:
+            strata_dotenv = sibling_strata_dir / ".env"
+            if strata_dotenv.exists():
+                for line in strata_dotenv.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        strata_env[k.strip()] = v.strip().strip('"').strip("'")
 
         # Explicit security tiers as requested:
         # delete, purge, prune, edit -> ALWAYS PERMISSION NEEDED (DANGEROUS)

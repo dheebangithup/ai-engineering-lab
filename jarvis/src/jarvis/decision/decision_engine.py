@@ -33,6 +33,15 @@ class DecisionEngine:
             logger.debug(f"Fast-path matched for query '{query}': {fast_result.intent.value}")
             return fast_result
 
-        # Step 2: Dedicated Decision Model classification
+        # Step 2: Query configured Decision Model from Provider Gateway
+        if self.gateway:
+            try:
+                gateway_decision = await self.gateway.classify_decision(query, context=context)
+                if isinstance(gateway_decision, TaskClassification):
+                    return gateway_decision
+            except Exception as e:
+                logger.warning(f"Gateway decision model execution warning ({e}). Falling back to local classifier.")
+
+        # Step 3: Resilient fallback
         classification = self.decision_model.evaluate(query, context=context)
         return classification

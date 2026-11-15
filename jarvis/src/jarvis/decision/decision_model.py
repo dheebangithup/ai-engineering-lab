@@ -34,6 +34,16 @@ class DecisionModel:
         r"\b(inspect|audit|evaluate|verify)\b",
     ]
 
+    # Durable memory signals (identity, preferences, tech stack, project facts, updates)
+    DURABLE_FACT_PATTERNS = [
+        r"\b(my name is|i am a|i am an|i'm a|i'm an|call me|i work as|my role is|my title is)\b",
+        r"\b(i prefer|i like|i always|i never|my preference is|my favorite|i usually use)\b",
+        r"\b(our project is|our stack is|we use|our database is|the architecture is|we are building|my repository is)\b",
+        r"\b(remember this|keep in mind|note that|make a note of|save this info|store this)\b",
+        r"\b(actually|correction|change my|update my|switch from|instead of|replace .* with|no longer|not anymore)\b",
+        r"\b(update the (runbook|procedure|steps|guide|memory))\b",
+    ]
+
     # Intent markers
     INTENT_MAP = [
         (TaskIntent.WEB_SEARCH, [
@@ -125,6 +135,11 @@ class DecisionModel:
         if detected_intent != TaskIntent.CONVERSATION and "memory" not in suggested_tools:
             suggested_tools.append("memory")
 
+        # Check durable memory signals (identity, user preferences, project facts)
+        has_durable_facts = any(re.search(p, text_lower) for p in self.DURABLE_FACT_PATTERNS)
+        if has_durable_facts and "memory" not in suggested_tools:
+            suggested_tools.append("memory")
+
         # 5. Map Suggested Agent
         if complexity == TaskComplexity.COMPLEX or detected_intent == TaskIntent.PLANNING:
             suggested_agent = "planning_agent"
@@ -144,7 +159,8 @@ class DecisionModel:
             complexity=complexity,
             intent=detected_intent,
             requires_planning=requires_planning,
-            requires_memory_recall=detected_intent != TaskIntent.CONVERSATION,
+            requires_memory_recall=True,  # Default mandatory memory grounding across all agents
+            requires_memory_ingest=has_durable_facts,
             suggested_agent=suggested_agent,
             suggested_tool_categories=suggested_tools,
             confidence=confidence,
@@ -164,6 +180,9 @@ class DecisionModel:
     def _extract_entities(self, text: str) -> List[str]:
         """Extract potential technical terms, filenames, and capital identifiers."""
         candidates = set()
+        # Identity patterns like "my name is <Name>", "call me <Name>"
+        for match in re.finditer(r"(?:my name is|call me|i am|i'm)\s+([A-Z][a-zA-Z]+)", text, re.IGNORECASE):
+            candidates.add(match.group(1))
         # CamelCase or snake_case or dotted paths
         for match in re.finditer(r"\b([A-Za-z0-9_]+(?:\.[a-z0-9]+|_v\d+))\b", text):
             candidates.add(match.group(1))

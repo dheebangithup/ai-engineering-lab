@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from jarvis.tools.decorators import jarvis_tool
 from jarvis.tools.schemas import PermissionTier, ToolParameter
-from jarvis.workspace import default_workspace
+from jarvis.workspace import get_workspace
 
 
 class PathTraversalError(PermissionError):
@@ -17,19 +17,27 @@ class PathTraversalError(PermissionError):
 
 
 def _resolve_safe_path(target_path: str | Path, base_dir: Optional[Path] = None) -> Path:
-    """Ensure path resolves cleanly without escaping the permitted root."""
-    base = (base_dir or Path.cwd()).resolve()
+    """
+    Ensure path resolves cleanly within authorized workspace boundaries:
+      1. Workspace code_workspace_dir (sandboxed coding agent workspace)
+      2. Workspace root_dir (~/.jarvis)
+      3. Current project working directory
+    """
+    ws = get_workspace()
+    default_base = ws.code_workspace_dir if not base_dir and not Path(target_path).is_absolute() else (base_dir or Path.cwd())
+    base = Path(default_base).resolve()
     target = (base / target_path).resolve() if not Path(target_path).is_absolute() else Path(target_path).resolve()
 
-    # Allow current working directory or default workspace root
-    ws_root = default_workspace().root_dir.resolve()
+    ws_root = ws.root_dir.resolve()
+    code_ws = ws.code_workspace_dir.resolve()
     cwd_root = Path.cwd().resolve()
 
-    # Path must be inside either workspace root or current project working directory
+    # Path must be inside workspace root, code workspace, or current working directory
     is_under_ws = ws_root in target.parents or target == ws_root
+    is_under_code_ws = code_ws in target.parents or target == code_ws
     is_under_cwd = cwd_root in target.parents or target == cwd_root
 
-    if not (is_under_ws or is_under_cwd):
+    if not (is_under_ws or is_under_code_ws or is_under_cwd):
         raise PathTraversalError(f"Access denied: Path '{target}' is outside allowed workspace boundaries.")
 
     return target

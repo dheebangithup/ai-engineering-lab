@@ -1,100 +1,98 @@
-# J.A.R.V.I.S. — Tools Gateway MVP
+# J.A.R.V.I.S. — Personal AI Agent & Engineering Partner
 
-A modular Tools Gateway for the J.A.R.V.I.S. AI agent, following the deferred tool discovery paradigm.
-
-## Core Architecture
-
-The Tools Gateway consists of three decoupled components:
-
-1. **`ToolRegistry`** ([`tool_registry.py`](file:///Users/dheeban/Documents/my_projects/ai-engineering-lab/jarvis/src/jarvis/tools/tool_registry.py))
-   - Stores tool definitions and their callable implementations in memory.
-   - Prevents duplicate tool IDs (`DuplicateToolError`).
-   - Exposes public `ToolDefinition` metadata without leaking Python implementation functions.
-
-2. **`ToolDiscovery`** ([`tool_discovery.py`](file:///Users/dheeban/Documents/my_projects/ai-engineering-lab/jarvis/src/jarvis/tools/tool_discovery.py))
-   - Accepts natural-language user requests.
-   - Tokenizes and ranks registered tools using the **`rank-bm25`** library (`BM25Okapi` algorithm with $k_1=1.5, b=0.75, \epsilon=0.25$).
-   - Returns only the matching `ToolDefinition` objects up to a configurable `max_results`.
-   - Returns an empty list when no relevant tools match.
-
-3. **`ToolsGateway`** ([`tools_gateway.py`](file:///Users/dheeban/Documents/my_projects/ai-engineering-lab/jarvis/src/jarvis/tools/tools_gateway.py))
-   - The centralized execution entry point for all agent tool invocations.
-   - Validates arguments against each tool's JSON-schema-compatible parameter specification.
-   - Gracefully handles unknown tool IDs, schema violations, and execution failures.
-   - Always returns a standardized [`ToolResult`](file:///Users/dheeban/Documents/my_projects/ai-engineering-lab/jarvis/src/jarvis/tools/schemas.py).
+J.A.R.V.I.S. (Just A Rather Very Intelligent System) is a modular, personal AI agent system inspired by Iron Man's JARVIS. Built with runtime-composable architecture, multi-provider fault tolerance, sub-5ms decision routing, an Uber-scale deferred tools gateway with human-in-the-loop security, and Model Context Protocol (MCP) multi-server integration.
 
 ---
 
-## Registered Initial Tools
+## 🌟 Key Architectural Pillars
 
-Implemented in [`src/jarvis/tools/implementations/`](file:///Users/dheeban/Documents/my_projects/ai-engineering-lab/jarvis/src/jarvis/tools/implementations):
+### 1. Resilient Multi-Provider LLM Gateway
+- Supports **Ollama Local**, **KodeKloud OpenAI-compatible**, **Groq**, and standard OpenAI endpoints.
+- Dynamic fallback chains: automatically cascades to secondary/tertiary providers if the primary endpoint experiences network failure, 403 model restriction, or timeouts.
+- Dynamic configuration store (`~/.jarvis/settings/providers.json`) allows adding, modifying, or re-ordering providers via the UI without application restarts.
 
-| Tool ID | Name | Description | Safeguard |
-|---|---|---|---|
-| `list_files` | List Files | List files/folders in an allowed directory | Restricted to base directory via `Path.resolve()` |
-| `read_file` | Read File | Read text content from a file | Path traversal checks (`PathTraversalError`) |
-| `write_file` | Write File | Write content to a file in workspace | Path traversal checks, parent dir creation |
-| `search_files` | Search Files | Search files for a text pattern | Path traversal checks |
-| `run_command` | Run Command | Execute permitted command | Explicit allowlist, `shell=False` (no injection) |
+### 2. Sub-5ms Decision Model
+- Evaluates task complexity (`SIMPLE`, `MODERATE`, `COMPLEX`) and detects intent (`CONVERSATION`, `WEB_SEARCH`, `FILE_PROCESSING`, `CODE_DEV`, `SYSTEM_COMMAND`, `MEMORY_QUERY`, `PLANNING`).
+- Uses zero-LLM fast path and deterministic classification models (<5ms) to route tasks without waking up heavy generative chat loops.
+
+### 3. Tools Gateway (The Uber Pattern)
+- Scales from 5 tools to 10,000+ tools seamlessly.
+- Agents are exposed to **only 3 meta-tools**:
+  1. `search_tools`: Discovers relevant tools dynamically using natural language BM25Okapi search.
+  2. `list_tools`: Browses available tool categories.
+  3. `execute_tool`: Validates schemas, enforces permissions, and executes sandboxed actions.
+- **Human-in-the-Loop Security**:
+  - `SAFE`: Read-only actions (auto-permitted).
+  - `SENSITIVE`: State modifications (audited).
+  - `DANGEROUS`: High-risk or destructive actions (e.g. `run_command`, `memory_delete`, `memory_prune`, `memory_purge_namespace`, `memory_edit`) require explicit authorization.
+
+### 4. Strata Cognitive Memory via MCP Protocol
+- Connects to the **Strata 4-Pillar Memory Engine** (`strata-mcp`) via the official Model Context Protocol (MCP) over `stdio`.
+- **Zero modification to sibling project code**.
+- Auto-bridges 8 cognitive memory tools (`memory_recall`, `memory_ingest`, `memory_store_explicit`, `memory_edit`, `memory_feedback`, `memory_delete`, `memory_prune`, `memory_purge_namespace`).
+
+### 5. Single Source of Truth (SSOT) Workspace
+- Fully configurable via `JARVIS_WORKSPACE` (default: `~/.jarvis`):
+  ```
+  ~/.jarvis/
+  ├── settings/          # providers.json, mcp_servers.json, agent_config.json
+  ├── memory/            # Local memory caches and audit trails
+  ├── code_workspace/    # Isolated execution sandbox for coding agents
+  ├── logs/              # app.log and jarvis.log
+  └── storage/           # sessions.db
+  ```
+- Dynamic discovery of sibling repositories without hardcoded user paths.
 
 ---
 
-## Agent Workflow
+## 🚀 Running the Web Application & UI
 
-```
-1. User Request: "Find all Python files in the project"
-                     │
-                     ▼
-2. ToolDiscovery: BM25 ranks tools against query tokens -> selects 'list_files'
-                     │
-                     ▼
-3. Agent: Receives ToolDefinition and inspects JSON input schema
-                     │
-                     ▼
-4. Agent: Supplies arguments {"directory": "src", "recursive": true}
-                     │
-                     ▼
-5. ToolsGateway: Validates arguments against schema & executes implementation
-                     │
-                     ▼
-6. ToolResult: Structured output {tool_id, success, data, error, metadata}
-```
-
----
-
-## Running the Demo
-
-Execute the standalone demonstration script:
+Launch the complete web application and modern React HUD dashboard:
 
 ```bash
-uv run python examples/demo_gateway.py
+./run.sh
 ```
 
-This runs both the agent workflow scenario as well as security and error-handling tests (path traversal protection, command allowlist rejection, schema validation, and unknown tool IDs).
-
----
-
-## Running the Tests
-
-Run the test suite with pytest:
-
-```bash
-# Run tool suite tests
-uv run pytest tests/tools/ -v
-```
-
-## Running the Web Application
-
-Launch the modern HTML/CSS/JS web interface:
-
+Or manually:
 ```bash
 uv run python app.py
 ```
 
-Or run uvicorn with module resolution:
+Open your browser at **[http://localhost:8000](http://localhost:8000)**.
 
+The React HUD Web UI (`frontend/`) features:
+- **💬 Command Console**: Interactive chat with execution mode selector (Auto vs Direct Provider), real-time reasoning trace accordion, markdown formatting, and tool execution badges.
+- **🤖 LLM Providers & Fallback**: Interactive Primary & Secondary fallback chain controls for each role (`fast`, `reasoning`, `decision`) with one-click save, live latency monitoring, edit provider capabilities, and dynamic endpoint configuration.
+- **🔌 External MCP Servers**: Live status of connected MCP servers (`strata-memory`) and tool bridging.
+- **🔧 Tools & Permissions**: Searchable and category-filtered explorer of registered tools and security authorization tiers.
+- **📁 Workspace SSOT**: Visual layout and JSON viewer of the active workspace configuration.
+
+---
+
+### Frontend Development (Optional)
+If modifying the React UI in `frontend/`:
 ```bash
-uv run python -m uvicorn jarvis.ui.server:app --app-dir src --host 0.0.0.0 --port 8000 --reload
+cd frontend
+npm run dev # Starts Vite dev server on http://localhost:3000 with API proxy to :8000
+npm run build # Compiles production assets into frontend/dist
 ```
 
-Open your browser at **http://localhost:8000**.
+---
+
+## 🖥️ Running the Interactive Terminal CLI
+
+To chat with J.A.R.V.I.S. directly in your terminal with live authorization challenges:
+
+```bash
+uv run python -m jarvis.interfaces.cli
+```
+
+---
+
+## 🧪 Running the Test Suite
+
+Run all 35 unit and integration tests:
+
+```bash
+uv run pytest tests/ -v
+```

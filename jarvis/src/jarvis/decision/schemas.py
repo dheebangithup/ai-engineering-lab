@@ -30,6 +30,7 @@ class TaskClassification(BaseModel):
     intent: TaskIntent = TaskIntent.CONVERSATION
     requires_planning: bool = False
     requires_memory_recall: bool = True
+    requires_memory_ingest: bool = Field(default=False, description="True if query contains durable facts, preferences, or profile info worth remembering")
     suggested_agent: str = Field(default="direct_agent", description="Agent template identifier to route to")
     suggested_tool_categories: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)

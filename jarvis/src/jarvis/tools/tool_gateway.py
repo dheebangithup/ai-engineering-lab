@@ -33,6 +33,8 @@ class ToolsGateway:
         if not hasattr(tool_fn, "_jarvis_tool_def"):
             raise ValueError(f"Function '{tool_fn.__name__}' is missing @jarvis_tool decorator")
         definition: ToolDefinition = getattr(tool_fn, "_jarvis_tool_def")
+        if self.registry.get_definition(definition.tool_id):
+            return  # Already registered, idempotent
         self.registry.register(definition, tool_fn)
 
     def discover_tools(
@@ -52,6 +54,7 @@ class ToolsGateway:
         self,
         tool_id: str,
         arguments: Optional[Dict[str, Any]] = None,
+        bypass_permission: bool = False,
     ) -> ToolResult:
         """
         Execute a tool by ID with schema validation and permission enforcement.
@@ -89,15 +92,23 @@ class ToolsGateway:
             )
 
         # 2. Permission Interceptor check (human-in-the-loop)
-        allowed = await self.permissions.verify_permission(tool_def, args)
-        if not allowed:
-            logger.warning(f"Permission denied for tool '{tool_id}'")
-            return ToolResult(
-                tool_id=tool_id,
-                success=False,
-                permission_denied=True,
-                error=f"Permission denied: Execution of '{tool_id}' was not authorized",
-            )
+        if not bypass_permission:
+            allowed = await self.permissions.verify_permission(tool_def, args)
+            if not allowed:
+                logger.warning(f"Permission denied for tool '{tool_id}'")
+                return ToolResult(
+                    tool_id=tool_id,
+                    success=False,
+                    permission_denied=True,
+                    error=f"Permission denied: Execution of '{tool_id}' ({tool_def.permission_tier.value}) requires explicit authorization.",
+                    data={
+                        "tool_id": tool_id,
+                        "tool_name": tool_def.name,
+                        "permission_tier": tool_def.permission_tier.value,
+                        "arguments": args,
+                        "reason": f"Tool '{tool_id}' is classified as {tool_def.permission_tier.value.upper()} and requires user approval before execution.",
+                    },
+                )
 
         # 3. Sandboxed execution
         start_time = time.perf_counter()
