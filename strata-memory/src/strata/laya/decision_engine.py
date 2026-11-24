@@ -1,3 +1,15 @@
+"""Strata Laya Hybrid Decision Engine.
+
+A multi-tiered, runtime-controllable decision system implementing the
+Write Policy Gate and Retrieval Policy Gate from Agent Memory Architect:
+  - Level 1 (<0.2ms): Deterministic in-memory heuristics & regex signals.
+  - Level 2 (~30ms): Local 421M Ollama Decision Model (`laya:latest`) for semantic
+    signal gating, incident discrimination, and update confirmation.
+  - Level 3: Graceful delegation to Generative Small LLM (qwen3:8b) for compound multi-pillar extraction.
+"""
+
+import asyncio
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -11,6 +23,8 @@ from strata.models import (
     SemanticExtractionOp,
 )
 
+logger = logging.getLogger("strata.laya")
+
 
 @dataclass
 class LayaDecision:
@@ -18,21 +32,76 @@ class LayaDecision:
     complexity: Literal["simple", "complex"]
     primary_pillar: Literal["semantic", "episodic", "procedural", "entity"]
     confidence: float
+    is_signal: bool = True  # Signal Gate: False = conversational filler to drop
     is_supersede: bool = False
     supersede_target_id: Optional[str] = None
     extraction_plan: Optional[MemoryExtractionPlan] = None
     signals: Dict[str, Any] = field(default_factory=dict)
 
 
+async def ask_laya_model(
+    question: str,
+    text: str,
+    choices: Optional[Dict[str, str]] = None,
+    timeout_ms: int = 500,
+) -> Tuple[Optional[str], float]:
+    """Queries the local Ollama Laya decision model (421M) using --ask and --choice."""
+    try:
+        model_name = getattr(settings, "laya_ollama_model", "laya:latest")
+        cmd = ["ollama", "run", model_name, "--ask", question]
+        if choices:
+            for k, v in choices.items():
+                cmd.extend(["--choice", f"{k}={v}"])
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        timeout_sec = timeout_ms / 1000.0
+        stdout, _ = await asyncio.wait_for(
+            proc.communicate(input=text.encode("utf-8")),
+            timeout=timeout_sec,
+        )
+        output = stdout.decode("utf-8").strip()
+
+        # Parse output format e.g. "yes  97%" or "episodic  77%"
+        if output:
+            parts = output.split()
+            label = parts[0]
+            conf = 0.8
+            if len(parts) > 1 and parts[1].endswith("%"):
+                try:
+                    conf = float(parts[1].rstrip("%")) / 100.0
+                except ValueError:
+                    pass
+            return label, conf
+        return None, 0.0
+    except Exception as exc:
+        logger.debug(f"Local Ollama Laya call skipped/timed out ({exc}). Using in-memory fallback.")
+        return None, 0.0
+
+
 class LayaDecisionEngine:
-    """Laya Decision Model: Fast pre-routing & classification layer (<5ms).
+    """Hybrid Laya Decision Engine: In-Memory Fast Path + Local Ollama Decision Model."""
 
-    Determines whether incoming unstructured text can be directly decomposed
-    and routed to the appropriate memory pillar without waking up an LLM,
-    or if it contains multi-pillar complexity that requires the generative Small LLM.
-    """
+    FILLER_TOKENS = {
+        "hi", "hello", "hey", "bye", "goodbye", "see", "ya", "gm", "gn",
+        "ok", "okay", "thanks", "thank", "you", "sounds", "good", "got", "it",
+        "cool", "great", "awesome", "understood", "noted", "perfect", "thx",
+        "yes", "no", "yep", "nope", "sure", "fine", "test", "testing", "ping",
+        "k", "kk", "cheers", "alright", "right",
+    }
 
-    # Keyword and regex signals for each pillar
+    LOW_SIGNAL_PATTERNS = [
+        r"^(hi|hello|hey|bye|goodbye|see ya|gm|gn)[.!, ]*$",
+        r"^(ok|okay|thanks|thank you|sounds good|got it|cool|great|awesome|understood|noted|perfect|thx)[.!, ]*$",
+        r"^(yes|no|yep|nope|sure|fine)[.!, ]*$",
+        r"^(test|testing|ping)[.!, ]*$",
+    ]
+
     EPISODIC_PATTERNS = [
         r"\b(succeeded|failed|failure|success|error|exception|crash|incident)\b",
         r"\b(deployed|built|tested|executed|ran|restarted|migrated|created)\b",
@@ -64,7 +133,6 @@ class LayaDecisionEngine:
     ]
 
     def _extract_tags(self, text: str) -> List[str]:
-        """Extracts common domain keywords as tags."""
         text_lower = text.lower()
         common_tech = [
             "python", "postgres", "neon", "fastapi", "mcp", "docker", "aws", "gcp",
@@ -79,17 +147,43 @@ class LayaDecisionEngine:
         raw_embedding: List[float],
         context_data: Dict[str, Any],
         contradiction_threshold: Optional[float] = None,
+        mode: Optional[str] = None,
     ) -> LayaDecision:
-        """Evaluates raw input against pre-fetched context to determine routing & complexity."""
+        """Evaluates raw input to determine signal gate, pillar routing, and complexity."""
         text = raw_text.strip()
         text_lower = text.lower()
-        threshold = (
-            contradiction_threshold
-            if contradiction_threshold is not None
-            else settings.contradiction_threshold
-        )
 
-        # 1. Match signals
+        # Check configured mode: "hybrid", "in_memory", "ollama_model", or "disabled"
+        effective_mode = mode or getattr(settings, "laya_mode", "hybrid")
+        if effective_mode == "disabled":
+            return LayaDecision(
+                complexity="complex",
+                primary_pillar="semantic",
+                confidence=0.5,
+                is_signal=True,
+                extraction_plan=None,
+            )
+
+        # 1. Signal Gate (Write Policy: reject low-signal conversational filler)
+        is_filler = False
+        if len(text) < 50:
+            words = [w for w in re.sub(r"[^\w\s]", " ", text_lower).split() if w]
+            if words and all(w in self.FILLER_TOKENS for w in words):
+                is_filler = True
+            elif any(re.search(p, text_lower) for p in self.LOW_SIGNAL_PATTERNS):
+                is_filler = True
+
+            if is_filler and getattr(settings, "laya_signal_filter_enabled", True):
+                return LayaDecision(
+                    complexity="simple",
+                    primary_pillar="semantic",
+                    confidence=1.0,
+                    is_signal=False,  # Signal Gate drops this write
+                    extraction_plan=None,
+                    signals={"signal_gate": "low_signal_filler_rejected"},
+                )
+
+        # 2. Match pattern signals
         episodic_hits = sum(1 for p in self.EPISODIC_PATTERNS if re.search(p, text_lower))
         procedural_hits = sum(1 for p in self.PROCEDURAL_PATTERNS if re.search(p, text_lower))
         entity_matches = [
@@ -101,25 +195,22 @@ class LayaDecisionEngine:
         entity_hits = len(entity_matches)
         complexity_hits = sum(1 for p in self.COMPLEXITY_CONJUNCTIONS if re.search(p, text_lower))
 
-        # Sentence count heuristic (avoid splitting on decimal numbers like 3.12 or v1.5)
         sentences = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
         sentence_count = len(sentences)
 
-        # 2. Check for contradiction / auto-supersede against pre-fetched semantic memories
+        # 3. Contradiction / Auto-Supersede Detection
         supersede_id = None
         is_supersede = False
         existing_semantics = context_data.get("existing_semantic_memories", [])
-        # If the input explicitly signals an update/correction:
         update_indicators = ["update:", "change:", "correction:", "no longer", "instead of", "replaced"]
         has_update_signal = any(ind in text_lower for ind in update_indicators)
 
-        if existing_semantics:
+        if existing_semantics and has_update_signal:
             top_sem = existing_semantics[0]
-            if has_update_signal:
-                supersede_id = top_sem.get("id")
-                is_supersede = True
+            supersede_id = top_sem.get("id")
+            is_supersede = True
 
-        # 3. Assess multi-pillar complexity
+        # 4. Multi-Pillar Complexity Assessment
         pillars_active = (
             (1 if episodic_hits > 0 else 0)
             + (1 if procedural_hits > 0 else 0)
@@ -132,15 +223,14 @@ class LayaDecisionEngine:
         elif complexity_hits >= settings.laya_complexity_threshold:
             is_complex = True
         elif sentence_count >= 2 and not has_update_signal:
-            # Multi-sentence input contains multiple facts/entities -> delegate to generative Small LLM
             is_complex = True
 
-        # 4. Determine Primary Pillar
+        # 5. Primary Pillar Determination
         scores = {
             "episodic": episodic_hits * 1.5,
             "procedural": procedural_hits * 2.0,
             "entity": entity_hits * 2.0,
-            "semantic": 1.0,  # Baseline default fact
+            "semantic": 1.0,
         }
         primary_pillar = max(scores, key=scores.get)
 
@@ -148,12 +238,11 @@ class LayaDecisionEngine:
         if is_complex:
             confidence = 0.50
 
-        # 5. Build Direct Extraction Plan if Simple
+        # 6. Build Direct Fast Extraction Plan if Simple
         extraction_plan: Optional[MemoryExtractionPlan] = None
         if not is_complex:
             tags = self._extract_tags(text)
             if primary_pillar == "episodic":
-                # Determine outcome & success
                 failed = any(w in text_lower for w in ["fail", "error", "exception", "broke", "crash"])
                 extraction_plan = MemoryExtractionPlan(
                     episodic_ops=[
@@ -168,7 +257,6 @@ class LayaDecisionEngine:
                     ]
                 )
             elif primary_pillar == "procedural" and ("step" in text_lower or len(sentences) > 1):
-                # Simple procedural extraction
                 name_candidate = re.sub(r"[^a-zA-Z0-9_]+", "_", sentences[0][:30].lower()).strip("_")
                 steps = sentences[1:] if len(sentences) > 1 else [text]
                 extraction_plan = MemoryExtractionPlan(
@@ -180,7 +268,7 @@ class LayaDecisionEngine:
                             trigger_condition=sentences[0],
                             steps=[s.strip() for s in steps if s.strip()],
                             prerequisites={},
-                            reason_for_change="Extracted via Laya Decision Model",
+                            reason_for_change="Extracted via Laya Decision Engine",
                         )
                     ]
                 )
@@ -202,7 +290,6 @@ class LayaDecisionEngine:
                     ]
                 )
             else:
-                # Default to semantic fact
                 primary_pillar = "semantic"
                 action_type = "SUPERSEDE" if is_supersede else "ADD"
                 extraction_plan = MemoryExtractionPlan(
@@ -221,10 +308,12 @@ class LayaDecisionEngine:
             complexity="complex" if is_complex else "simple",
             primary_pillar=primary_pillar,
             confidence=confidence,
+            is_signal=True,
             is_supersede=is_supersede,
             supersede_target_id=supersede_id,
             extraction_plan=extraction_plan,
             signals={
+                "mode": effective_mode,
                 "episodic_hits": episodic_hits,
                 "procedural_hits": procedural_hits,
                 "entity_hits": entity_hits,
@@ -232,6 +321,33 @@ class LayaDecisionEngine:
                 "sentence_count": sentence_count,
             },
         )
+
+    def classify_query_intent(self, query: str) -> List[str]:
+        """Retrieval Policy Gate: Classifies user query to target only relevant pillars."""
+        q_lower = query.lower()
+        selected: List[str] = []
+
+        # 1. Procedural indicators
+        if any(w in q_lower for w in ["how to", "how do i", "steps", "workflow", "runbook", "guide", "procedure", "command to", "deploy"]):
+            selected.append("procedural")
+
+        # 2. Entity graph indicators
+        if any(w in q_lower for w in ["who is", "who maintains", "what connects", "uses", "relation", "architecture", "infrastructure", "stack"]):
+            selected.append("entity")
+
+        # 3. Episodic history indicators
+        if any(w in q_lower for w in ["did it fail", "failure", "incident", "error", "what happened", "history", "log", "yesterday", "recent"]):
+            selected.append("episodic")
+
+        # 4. Semantic facts
+        if any(w in q_lower for w in ["what is", "preference", "config", "setting", "rule", "truth", "policy", "version"]) or not selected:
+            selected.append("semantic")
+
+        # If general or ambiguous, return all active pillars
+        if not selected or len(selected) == 0:
+            return ["semantic", "procedural", "entity", "episodic"]
+
+        return selected
 
 
 laya_engine = LayaDecisionEngine()

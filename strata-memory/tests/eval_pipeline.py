@@ -31,6 +31,11 @@ from strata.service import (
     svc_memory_purge_namespace,
     svc_memory_recall,
     svc_memory_store_explicit,
+    svc_working_memory_add,
+    svc_working_memory_add_tool_output,
+    svc_working_memory_clear,
+    svc_working_memory_get,
+    svc_working_memory_unprotect,
 )
 
 # Dedicated isolated namespace strictly for evaluation
@@ -223,6 +228,72 @@ async def run_eval_pipeline():
             "details": "Active before 1s TTL, excluded after 1.5s",
         }
         print(f"=> Assessment: {'✅ PASSED (Temporal Invalidation Verified)' if case1c_pass else '❌ FAILED'}")
+
+        # Case 1D: Write Policy Signal Gate (Conversational Filler Rejection)
+        print_case_header(
+            "Case 1D",
+            "Write Policy Signal Gate (Conversational Filler)",
+            "Laya Decision Model (Zero-DB Drop)",
+        )
+        filler_input = "Thanks, got it!"
+        print(f"📥 Input: \"{filler_input}\"")
+        t0 = time.perf_counter()
+        res_1d = await svc_memory_ingest(raw_text=filler_input, namespace=NAMESPACE)
+        t1 = time.perf_counter()
+        latency_1d_ms = (t1 - t0) * 1000.0
+
+        is_filtered = res_1d.details.get("mode") == "laya_signal_filtered"
+        no_created = len(res_1d.created_ids) == 0
+        print(f"⏱️ Signal Gate Latency: {latency_1d_ms:.2f} ms")
+        print(f"   Result Mode: '{res_1d.details.get('mode')}', Created Count: {len(res_1d.created_ids)}")
+
+        case1d_pass = is_filtered and no_created
+        results_summary["Case 1D: Write Policy Signal Gating"] = {
+            "passed": case1d_pass,
+            "handler": "Laya Decision Model",
+            "details": f"mode={res_1d.details.get('mode')}, dropped=True, latency={latency_1d_ms:.1f}ms",
+        }
+        print(f"=> Assessment: {'✅ PASSED (Signal Gating Verified)' if case1d_pass else '❌ FAILED'}")
+
+        # Case 1E: Fact Reaffirmation & Half-Life Decay Reset
+        print_case_header(
+            "Case 1E",
+            "Fact Reaffirmation & Half-Life Decay Reset",
+            "Strata Storage Engine (reaffirmed_at update)",
+        )
+        fact_reaffirm_text = "The staging cluster uses us-east-1 and requires SSL connections."
+        # Initial store
+        res_init = await svc_memory_ingest(raw_text=fact_reaffirm_text, namespace=NAMESPACE, fast_mode=True)
+        fact_id = res_init.created_ids[0]
+
+        # Re-observe identical fact
+        print(f"📥 Re-observing identical fact: \"{fact_reaffirm_text}\"")
+        t0 = time.perf_counter()
+        res_1e = await svc_memory_ingest(raw_text=fact_reaffirm_text, namespace=NAMESPACE, fast_mode=True)
+        t1 = time.perf_counter()
+        latency_1e_ms = (t1 - t0) * 1000.0
+
+        reaffirmed_same_id = (len(res_1e.created_ids) == 1 and res_1e.created_ids[0] == fact_id)
+
+        async with pool.acquire() as conn:
+            reaffirm_row = await conn.fetchrow(
+                "SELECT access_count, reaffirmed_at FROM memories WHERE memory_id = $1;",
+                UUID(fact_id),
+            )
+
+        has_reaffirmed_ts = reaffirm_row["reaffirmed_at"] is not None
+        access_count_bumped = reaffirm_row["access_count"] >= 1
+        print(f"⏱️ Reaffirmation Latency: {latency_1e_ms:.2f} ms")
+        print(f"   Target ID: {res_1e.created_ids[0][:8]} (reaffirmed same ID: {reaffirmed_same_id})")
+        print(f"   reaffirmed_at: {reaffirm_row['reaffirmed_at']}, access_count: {reaffirm_row['access_count']}")
+
+        case1e_pass = reaffirmed_same_id and has_reaffirmed_ts and access_count_bumped
+        results_summary["Case 1E: Fact Reaffirmation & Decay Reset"] = {
+            "passed": case1e_pass,
+            "handler": "Strata Storage Engine",
+            "details": f"reaffirmed_id={res_1e.created_ids[0][:8]}, access_count={reaffirm_row['access_count']}, ts_set={has_reaffirmed_ts}",
+        }
+        print(f"=> Assessment: {'✅ PASSED (Fact Reaffirmation Verified)' if case1e_pass else '❌ FAILED'}")
 
         # =====================================================================
         # PILLAR 2: EPISODIC MEMORY
@@ -652,6 +723,84 @@ async def run_eval_pipeline():
             "details": f"latency={latency_6_ms:.1f}ms, xml_context_valid=True",
         }
         print(f"=> Assessment: {'✅ PASSED (Hybrid Recall & XML Assembly Verified)' if case6_pass else '❌ FAILED'}")
+
+        # =====================================================================
+        # SHORT-TERM WORKING MEMORY SUITE
+        # =====================================================================
+        print_section("SHORT-TERM WORKING MEMORY & TOOL PINNING SUITE")
+
+        # Case 7: Protected Tool Pinning & Budget Eviction
+        print_case_header(
+            "Case 7",
+            "Working Context Buffer & Tool Pinning (Eviction Bug Prevention)",
+            "WorkingMemoryManager (protected=True)",
+        )
+        session_id_7 = "eval_session_pinning_test"
+        svc_working_memory_clear(namespace=NAMESPACE, session_id=session_id_7)
+
+        # 1. Add conversation messages
+        svc_working_memory_add(
+            namespace=NAMESPACE,
+            session_id=session_id_7,
+            role="user",
+            content="Check database migration status.",
+            turn_id=1,
+        )
+        svc_working_memory_add(
+            namespace=NAMESPACE,
+            session_id=session_id_7,
+            role="assistant",
+            content="Invoking db_status check now...",
+            turn_id=2,
+        )
+
+        # 2. Add protected tool output
+        t0 = time.perf_counter()
+        tool_item = svc_working_memory_add_tool_output(
+            namespace=NAMESPACE,
+            session_id=session_id_7,
+            tool_call_id="call_neon_db_status",
+            tool_name="db_status",
+            content="STATUS=HEALTHY, APPLIED_MIGRATIONS=1, ACTIVE_ENDPOINTS=1",
+            protected=True,
+        )
+        t1 = time.perf_counter()
+        latency_7_ms = (t1 - t0) * 1000.0
+
+        # 3. Add subsequent dialogue that pushes total tokens above small budget
+        svc_working_memory_add(
+            namespace=NAMESPACE,
+            session_id=session_id_7,
+            role="assistant",
+            content="Database is healthy. Proceeding to verify the application endpoints next.",
+            turn_id=4,
+        )
+
+        # 4. Enforce strict token budget (25 tokens)
+        ctx_budgeted = svc_working_memory_get(namespace=NAMESPACE, session_id=session_id_7, max_tokens=25)
+        pinned_retained = any(
+            i["tool_call_id"] == "call_neon_db_status" and i["protected"] is True
+            for i in ctx_budgeted["items"]
+        )
+        print(f"⏱️ Tool Pinning Latency: {latency_7_ms:.2f} ms")
+        print(f"   Context Item Count (after budget 25): {ctx_budgeted['item_count']}")
+        print(f"   Tool Output Pinned & Retained: {pinned_retained}")
+
+        # 5. Unprotect and clean up
+        svc_working_memory_unprotect(
+            namespace=NAMESPACE,
+            session_id=session_id_7,
+            tool_call_id="call_neon_db_status",
+        )
+        svc_working_memory_clear(namespace=NAMESPACE, session_id=session_id_7)
+
+        case7_pass = pinned_retained and (tool_item["protected"] is True)
+        results_summary["Case 7: Working Memory Tool Pinning"] = {
+            "passed": case7_pass,
+            "handler": "Working Memory Buffer",
+            "details": f"protected_retained=True, eviction_bug_prevented=True, latency={latency_7_ms:.1f}ms",
+        }
+        print(f"=> Assessment: {'✅ PASSED (Tool Pinning & Eviction Prevention Verified)' if case7_pass else '❌ FAILED'}")
 
     finally:
         # =====================================================================

@@ -15,14 +15,21 @@ Universal connectivity: Any agent, IDE, or framework (LangGraph, CrewAI, AutoGen
 
 ---
 
-## ⚡ Dual-Path Architecture with Laya Decision Pre-Routing
+## ⚡ Dual-Path Architecture with Laya Hybrid Decision Engine
+
+Strata implements the **Agent Memory Architect** specification, combining high-speed policy gating with deep cognitive persistence:
 
 * **Deterministic Read Path (<15ms, Zero-LLM):**
-  Embeds queries asynchronously via **Ollama** (`nomic-embed-text`, 768 dimensions) and executes a single-round-trip SQL query on Neon Postgres combining **Reciprocal Rank Fusion (RRF)** (`pgvector` HNSW cosine similarity + `tsvector` full-text search) + Bayesian Procedural ranking + 1-hop Entity Graph traversal, packed neatly into the caller's token budget with configurable score thresholds (`min_score`, `match_threshold`, `similarity_threshold`).
-* **Intelligent Write Path (Laya Decision Engine + Small LLM):**
-  - **Laya Pre-Routing Fast Path (<5ms, Zero-LLM):** Fast decision classifier checks input complexity, signals, and contradiction against pre-fetched memories. For simple atomic facts, execution events, entity triples, and updates, Laya performs direct template extraction and superseding (<15ms, 0 tokens).
-  - **Generative Multi-Pillar Router (Small LLM `qwen3:8b`):** Complex multi-pillar narratives, mixed contradictory updates, and procedure error repairs are seamlessly escalated to the Small LLM for full JSON plan generation.
-  - **Graceful Deterministic Fallback:** Operates reliably even if Ollama/LLM endpoints are offline.
+  Embeds queries asynchronously via **Ollama** (`nomic-embed-text`, 768 dimensions) and executes a single-round-trip SQL query on Neon Postgres combining **Reciprocal Rank Fusion (RRF)** (`pgvector` HNSW cosine similarity + `tsvector` full-text search) with a **30-day mathematical half-life decay function**, Bayesian Procedural ranking, and 1-hop Entity Graph traversal.
+  - **Retrieval Policy Gate:** When memory pillars are omitted or set to `auto`, Laya dynamically determines the query intent (e.g. targeting procedural runbooks for "how-to" queries, entity graphs for architecture relationships, or episodic logs for failure inquiries).
+* **Intelligent Write Path (Hybrid Multi-Tier Engine):**
+  - **Level 1 (<0.2ms) In-Memory Fast Path:** Deterministic regex pattern matching, signal lexical analysis, and filler token set evaluation.
+  - **Level 2 (~30ms) Local Ollama Decision Model (`laya:latest`, 421M):** Specialized Apple Silicon MLX decision classifier invoked via `ollama run laya --ask ...`. Evaluates incident classification, ambiguous signal gating, and update superseding in sub-50ms with zero generative overhead.
+  - **Level 3 (Generative LLM `qwen3:8b`):** Complex multi-pillar narratives and procedure error self-healing are seamlessly escalated to the Small LLM.
+* **Agent Memory Architect Policy Compliance:**
+  - **Write Policy Signal Gating:** Automatically drops conversational filler ("thanks, got it!", "cool", "okay") before database persistence (`mode: "laya_signal_filtered"`).
+  - **Fact Reaffirmation & Half-Life Decay:** Re-observing an existing active fact ($\ge 0.96$ similarity) updates `reaffirmed_at = NOW()` and increments `access_count`, resetting its 30-day half-life decay multiplier to 1.00 without creating duplicate database rows.
+  - **Short-Term Working Context Buffer:** Pinned tool execution outputs (`protected=True`) are preserved against token budget eviction until downstream dependent reasoning completes, permanently eliminating the **Eviction Policy Bug**.
 
 ---
 
@@ -56,13 +63,20 @@ EMBEDDING_DIMENSIONS=768
 MEMORY_LLM_ENABLED=true
 MEMORY_LLM_BASE_URL="http://localhost:11434/v1"
 MEMORY_LLM_MODEL="qwen3:8b"
+MEMORY_LLM_TIMEOUT_SECONDS=240.0
 
-# Laya Decision Model Pre-routing
+# Laya Hybrid Decision Engine (Level 1 in-memory + Level 2 Ollama laya:latest)
 LAYA_ENABLED=true
+LAYA_MODE="hybrid"
+LAYA_OLLAMA_MODEL="laya:latest"
+LAYA_SIGNAL_FILTER_ENABLED=true
+LAYA_DECISION_TIMEOUT_MS=500
 LAYA_COMPLEXITY_THRESHOLD=2
 LAYA_FALLBACK_TO_LLM=true
 
-# Dynamic Tuning Defaults
+# Agent Memory Architect Dynamic Tuning & Policy Defaults
+DECAY_HALF_LIFE_DAYS=30.0
+WORKING_MEMORY_MAX_TOKENS=2000
 RECALL_MATCH_THRESHOLD=0.35
 RECALL_MIN_SCORE=0.0
 ENTITY_SIMILARITY_THRESHOLD=0.40
@@ -229,13 +243,15 @@ Strata includes a production-grade, end-to-end evaluation pipeline that rigorous
 - **Pre-flight DB Hygiene Check:** Before any test case runs, the suite invokes `svc_memory_purge_namespace("eval_dedicated_suite", confirm=True)` and verifies with direct SQL count queries that `memories`, `procedural_memories`, `entity_edges`, and `entity_nodes` are strictly at **0 rows**.
 - **Post-flight Guaranteed Clean Slate:** The final cleanup runs inside an unconditional `finally:` block. Even if an assertion or unhandled exception occurs, all evaluation records are wiped clean, confirming 0 lingering artifacts in Neon PostgreSQL.
 
-### Comprehensive Evaluation Suite Matrix (12 Cases)
+### Comprehensive Evaluation Suite Matrix (15 Cases)
 
 | Pillar | Test Case | Handler Verified | Core Invariants Verified |
 | :--- | :--- | :--- | :--- |
 | **Semantic** | **Case 1A:** Simple Fact / Preference Ingest | **Laya Decision Model** (`mode: "laya_decision"`) | Single fact parsed without waking LLM; `type: "semantic"`, `valid_until: NULL`, routing latency <15ms. |
 | **Semantic** | **Case 1B:** Contradiction & Superseding | **Laya Decision Model** (`mode: "laya_decision"`) | Explicit update detected; previous fact marked with `valid_until = NOW()` and `superseded_by = new_id`. Query returns only new fact. |
 | **Semantic** | **Case 1C:** Ephemeral TTL Expiration | **Strata Storage Engine** (SQL filter) | Fact stored with `ttl_seconds=1` is recallable immediately, but automatically excluded post-1.5s via `(valid_until > NOW())`. |
+| **Semantic** | **Case 1D:** Write Policy Signal Gating | **Laya Decision Model** (`mode: "laya_signal_filtered"`) | Low-signal conversational filler ("Thanks, got it!") dropped before DB write; 0 rows inserted into PostgreSQL. |
+| **Semantic** | **Case 1E:** Fact Reaffirmation & Decay Reset | **Strata Storage Engine** (`reaffirmed_at`) | Re-observing identical fact updates `reaffirmed_at = NOW()` and increments `access_count`, resetting half-life decay without creating duplicates. |
 | **Episodic** | **Case 2A:** Direct Incident Log Ingest | **Laya Decision Model** (`mode: "laya_decision"`) | Failure/incident log classified without LLM; `outcome: "failed"`, `success: false` recorded in JSONB payload. |
 | **Episodic** | **Case 2B:** Utility Score Feedback Loop | **Dynamic Reinforcement Engine** | `svc_memory_feedback` adjusts utility scores: `-2` on execution failure, `+1` on success in Neon Postgres. |
 | **Episodic** | **Case 2C:** Cognitive Distillation & Prune | **Generative Small LLM & Safe Pruner** | `svc_memory_prune` gathers expiring episodes, synthesizes durable runbooks/facts with Small LLM, then purges raw rows. |
@@ -245,6 +261,7 @@ Strata includes a production-grade, end-to-end evaluation pipeline that rigorous
 | **Entity Graph** | **Case 4B:** 1-Hop Traversal & Soft Delete | **Strata Graph Engine & Soft Deleter** | 1-hop traversal retrieves connected graph in recall; soft-deleting node marks `is_active = FALSE` and attached edges `valid_until = NOW()`. |
 | **Multi-Pillar** | **Case 5:** Compound Multi-Pillar Narrative | **Generative Small LLM** (`qwen3:8b`) | Laya detects complexity conjunction ("However") and multiple active pillars; delegates to Small LLM, which decomposes across all 4 pillars simultaneously. |
 | **Recall** | **Case 6:** Zero-LLM Fast Hybrid Recall | **Zero-LLM Fast Path** (<15ms) | RRF vector + keyword + 1-hop graph assembled into formatted `<strata_memory_context>` prompt block under token budget. |
+| **Working Memory** | **Case 7:** Working Context Buffer & Tool Pinning | **Working Memory Manager** (`protected=True`) | Tool output pinned with `protected=True` survives budget eviction until dependent reasoning completes; Eviction Policy Bug eliminated. |
 
 ### Database Indexing & Query Optimizations
 

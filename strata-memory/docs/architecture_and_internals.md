@@ -143,14 +143,21 @@ To eliminate the twin failure modes of classical agent memory systems (high read
   - `DIRECT_DATABASE_URL`: Direct unpooled connection used exclusively for DDL migrations (`sql/001_init_schema.sql`).
 * **Scale-to-Zero Handling:** Neon serverless compute suspend/resume cycles are protected by connection retries and `max_inactive_connection_lifetime=300.0`.
 
-### 3.4 Laya Decision Pre-Routing Engine (`src/strata/laya/`)
-* **Role:** Sub-5ms pre-routing and classification gatekeeper on the write path.
-* **Heuristics & Signal Analysis:**
-  - Detects pillar signals (Episodic event words, Procedural step keywords, Entity relationship verbs like `USES`/`RUNS_ON`, and Semantic preferences).
-  - Evaluates sentence complexity and conjunction density.
-  - Inspects pre-fetched context for direct contradictions and update indicators.
-* **Zero-LLM Fast Path:** If input is a straightforward atomic statement or update, generates a structured `MemoryExtractionPlan` directly, bypassing the generative LLM entirely (<15ms latency, 0 tokens).
-* **Escalation Gate:** Escalates multi-pillar narratives, complex workflow procedures, and ambiguous multi-entity statements to the Small LLM.
+### 3.4 Laya Hybrid Decision Engine (`src/strata/laya/`)
+* **Role:** Sub-millisecond pre-routing, signal gating, and classification gatekeeper on the write and read paths, aligning directly with the **Agent Memory Architect** specification.
+* **Multi-Tier Execution Hierarchy:**
+  - **Level 1 (<0.2ms) In-Memory Fast Path:** Deterministic regex pattern matching, signal lexical analysis, and filler token set evaluation.
+  - **Level 2 (~30ms) Local Ollama Decision Model (`laya:latest`, 421M):** Specialized Apple Silicon MLX decision classifier invoked via `ollama run laya --ask ... [--choice ...]`. Provides sub-50ms incident discrimination, ambiguous signal classification, and update confirmation with zero generative overhead.
+  - **Level 3 (Generative LLM):** Gracefully escalates compound multi-pillar narratives, complex workflow procedures, and ambiguous multi-entity statements to the Small LLM (`qwen3:8b`).
+* **Configurable & Runtime-Controllable Modes (`laya_mode`):**
+  - `"hybrid"` (default): Level 1 in-memory fast path + Level 2 local Laya model for ambiguous cases.
+  - `"in_memory"`: Pure zero-subprocess pattern heuristics (<0.2ms).
+  - `"ollama_model"`: Force local Ollama Laya model evaluation for all policy gates.
+  - `"disabled"`: Bypass Laya entirely; all writes route directly to the Small LLM.
+* **Agent Memory Architect Policy Gates:**
+  1. **Write Policy Signal Gate:** Detects and drops low-signal conversational filler ("thanks, got it!", "cool", "sounds good") before database persistence, preventing memory bloat (`mode: "laya_signal_filtered"`).
+  2. **Retrieval Policy Intent Gate:** Classifies recall queries dynamically (procedural skills, entity graphs, episodic incident history, or semantic facts) when pillars are omitted.
+  3. **Zero-LLM Fast Path:** If input is a straightforward atomic statement or update, generates a structured `MemoryExtractionPlan` directly, bypassing the generative LLM entirely (<15ms latency, 0 tokens).
 
 ### 3.5 Memory-Side Small LLM Router (`src/strata/llm_processor/router.py`)
 * **Model:** `qwen3:8b` (via Ollama or any OpenAI-compatible endpoint).
@@ -166,6 +173,14 @@ To eliminate the twin failure modes of classical agent memory systems (high read
 * **Dynamic Score Filtering:** Filters recalled candidates against `min_score`, `match_threshold`, and `similarity_threshold`.
 * **Asynchronous Access Counter:** Launches an asynchronous background task to increment `access_count` on all returned memory UUIDs without adding query latency.
 * **Token Budget Packing:** Calculates token count approximation (`chars // 4`) and packs items section by section. If budget is exceeded, it cleanly closes all XML tags, preserving XML syntax.
+
+### 3.7 Short-Term Working Memory Context Buffer (`src/strata/working_memory.py`)
+* **Role:** Active conversational turn buffer partitioned by `(namespace, session_id)` managing live trajectory state and tool executions.
+* **Eviction Policy Bug Prevention:** In classical memory architectures, FIFO token pruning drops the output of recent tool executions before dependent steps can ingest them, resulting in repeated tool calls and infinite agent retries.
+* **Tool Result Pinning (`protected=True`):**
+  - Tool execution results are automatically pinned as `protected=True` when recorded.
+  - When the context buffer reaches its `WORKING_MEMORY_MAX_TOKENS` budget, oldest non-protected conversational messages are evicted first.
+  - Protected tool outputs are **never evicted** until downstream reasoning calls `svc_working_memory_unprotect()`.
 
 ---
 
@@ -192,6 +207,7 @@ CREATE TABLE IF NOT EXISTS memories (
     superseded_by  UUID REFERENCES memories(memory_id) ON DELETE SET NULL,
     valid_from     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     valid_until    TIMESTAMPTZ DEFAULT NULL, -- NULL means currently ACTIVE
+    reaffirmed_at  TIMESTAMPTZ DEFAULT NULL, -- Resets half-life decay timer on fact re-observation
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -325,9 +341,16 @@ WITH (m = 16, ef_construction = 64);
 ```
 At 1,000,000 records, finding the nearest neighbors takes **~2ms to 4ms**.
 
-### Mechanism 3: Relational Reciprocal Rank Fusion (RRF)
-Fuses vector HNSW rank and BM25 lexical rank inside the Postgres database engine:
-$$\text{Score} = \frac{1}{60 + \text{rank}_{\text{vec}}} + \frac{1}{60 + \text{rank}_{\text{bm25}}} + (\text{utility\_boost})$$
+### Mechanism 3: Relational Reciprocal Rank Fusion (RRF) with Half-Life Decay & Fact Reaffirmation
+Fuses vector HNSW rank and BM25 lexical rank inside the Postgres database engine, weighted by a 30-day mathematical half-life decay function:
+$$\text{Score} = \left(\frac{1}{60 + \text{rank}_{\text{vec}}} + \frac{1}{60 + \text{rank}_{\text{bm25}}}\right) \times \left(0.65 + 0.35 \times 0.5^{\frac{\Delta t}{30.0}}\right) + (\text{utility\_boost})$$
+- $\Delta t$: Days elapsed since the fact was created or reaffirmed: `EXTRACT(EPOCH FROM (NOW() - COALESCE(reaffirmed_at, created_at))) / 86400.0`.
+- **Fact Reaffirmation:** When an existing active fact is re-observed (similarity $\ge 0.96$ without contradiction), Strata executes:
+  ```sql
+  UPDATE memories SET reaffirmed_at = NOW(), access_count = access_count + 1 WHERE memory_id = $id;
+  ```
+  This immediately resets $\Delta t = 0$ (multiplier returns to 1.00) without inserting duplicate rows.
+- **Half-Life Decay:** After 30 days without reaffirmation, multiplier decays to 0.825; after 60 days to 0.7375. Stale facts naturally yield to fresher context without data loss.
 - `rank_vector`: Derived from HNSW cosine distance `(m.embedding <=> query_vec)`.
 - `rank_bm25`: Derived from `ts_rank_cd(to_tsvector('english', summary), parsed_query)`.
 - `utility_boost`: `clamp(utility_score, -5, +20) * 0.001` (proven memories rank higher).

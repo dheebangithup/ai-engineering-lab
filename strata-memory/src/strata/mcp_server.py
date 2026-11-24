@@ -16,6 +16,9 @@ from strata.service import (
     svc_memory_purge_namespace,
     svc_memory_recall,
     svc_memory_store_explicit,
+    svc_working_memory_add_tool_output,
+    svc_working_memory_get,
+    svc_working_memory_unprotect,
 )
 
 # Direct all logs to stderr to keep stdout pure for JSON-RPC stdio transport
@@ -176,6 +179,13 @@ async def memory_ingest(
             description="Optional time-to-live in seconds. After this duration, the memory soft-expires.",
         ),
     ] = None,
+    laya_mode: Annotated[
+        Optional[Literal["hybrid", "in_memory", "ollama_model", "disabled"]],
+        Field(
+            default=None,
+            description="Optional runtime control for Laya Decision Engine mode ('hybrid', 'in_memory', 'ollama_model', 'disabled').",
+        ),
+    ] = None,
 ) -> str:
     """Autonomously ingest and route unstructured information across the 4 Memory Pillars.
 
@@ -201,6 +211,7 @@ async def memory_ingest(
             fast_mode=fast_mode,
             source_id=source_id,
             ttl_seconds=ttl_seconds,
+            laya_mode=laya_mode,
         )
         return res.model_dump_json(indent=2)
     finally:
@@ -246,6 +257,13 @@ async def memory_store_explicit(
         Field(
             default=None,
             description="Optional time-to-live in seconds. After this duration, the memory soft-expires.",
+        ),
+    ] = None,
+    laya_mode: Annotated[
+        Optional[Literal["hybrid", "in_memory", "ollama_model", "disabled"]],
+        Field(
+            default=None,
+            description="Optional runtime control for Laya Decision Engine mode ('hybrid', 'in_memory', 'ollama_model', 'disabled').",
         ),
     ] = None,
 ) -> str:
@@ -550,6 +568,113 @@ async def memory_purge_namespace(
         return res.model_dump_json(indent=2)
     finally:
         await maybe_suspend_neon_compute()
+
+
+# ============================================================================
+# TOOL 9: working_memory_record_tool_output
+# ============================================================================
+@mcp.tool()
+def working_memory_record_tool_output(
+    session_id: Annotated[
+        str,
+        Field(description="Active session or trajectory ID."),
+    ],
+    tool_call_id: Annotated[
+        str,
+        Field(description="Unique ID of the tool call (e.g. call_abc123)."),
+    ],
+    tool_name: Annotated[
+        str,
+        Field(description="Name of the tool that was executed."),
+    ],
+    content: Annotated[
+        str,
+        Field(description="Tool output / execution results."),
+    ],
+    namespace: Annotated[
+        str,
+        Field(default="default", description="Namespace partition (default: 'default')."),
+    ] = "default",
+    protected: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="Whether this result is pinned against budget eviction (default: True to prevent Eviction Policy Bug).",
+        ),
+    ] = True,
+) -> str:
+    """Record an active tool output into short-term working context buffer, pinned against eviction.
+
+    WHEN TO USE:
+    - Immediately after executing a tool whose result is needed for downstream steps.
+    - Prevents the Eviction Policy Bug where active tool output is evicted and causes repeated tool retries.
+    """
+    res = svc_working_memory_add_tool_output(
+        namespace=namespace,
+        session_id=session_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        content=content,
+        protected=protected,
+    )
+    return json.dumps(res, indent=2)
+
+
+# ============================================================================
+# TOOL 10: working_memory_unprotect
+# ============================================================================
+@mcp.tool()
+def working_memory_unprotect(
+    session_id: Annotated[
+        str,
+        Field(description="Active session or trajectory ID."),
+    ],
+    tool_call_id: Annotated[
+        str,
+        Field(description="Unique ID of the tool call to unprotect."),
+    ],
+    namespace: Annotated[
+        str,
+        Field(default="default", description="Namespace partition (default: 'default')."),
+    ] = "default",
+) -> str:
+    """Unprotects a previously pinned tool output once dependent steps have completed."""
+    unprotected = svc_working_memory_unprotect(
+        namespace=namespace,
+        session_id=session_id,
+        tool_call_id=tool_call_id,
+    )
+    return json.dumps({"session_id": session_id, "tool_call_id": tool_call_id, "unprotected": unprotected}, indent=2)
+
+
+# ============================================================================
+# TOOL 11: working_memory_get_context
+# ============================================================================
+@mcp.tool()
+def working_memory_get_context(
+    session_id: Annotated[
+        str,
+        Field(description="Active session or trajectory ID."),
+    ],
+    namespace: Annotated[
+        str,
+        Field(default="default", description="Namespace partition (default: 'default')."),
+    ] = "default",
+    max_tokens: Annotated[
+        Optional[int],
+        Field(
+            default=None,
+            description="Optional token budget limit. Evicts oldest non-protected items first; protected items are NEVER evicted.",
+        ),
+    ] = None,
+) -> str:
+    """Retrieves current short-term working context items for a session."""
+    res = svc_working_memory_get(
+        namespace=namespace,
+        session_id=session_id,
+        max_tokens=max_tokens,
+    )
+    return json.dumps(res, indent=2)
 
 
 def main() -> None:

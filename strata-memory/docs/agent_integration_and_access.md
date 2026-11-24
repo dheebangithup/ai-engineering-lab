@@ -32,6 +32,9 @@ from strata.service import (
     svc_memory_store_explicit,
     svc_memory_feedback,
     svc_memory_delete,
+    svc_working_memory_add_tool_output,
+    svc_working_memory_unprotect,
+    svc_working_memory_get,
 )
 from strata.db import close_db_pool
 
@@ -179,8 +182,14 @@ Claude Desktop and Cursor launch MCP server sub-processes without inheriting you
         "MEMORY_LLM_BASE_URL": "http://localhost:11434/v1",
         "MEMORY_LLM_API_KEY": "ollama",
         "MEMORY_LLM_MODEL": "qwen3:8b",
-        "MEMORY_LLM_TIMEOUT_SECONDS": "120.0",
+        "MEMORY_LLM_TIMEOUT_SECONDS": "240.0",
         "LAYA_ENABLED": "true",
+        "LAYA_MODE": "hybrid",
+        "LAYA_OLLAMA_MODEL": "laya:latest",
+        "LAYA_SIGNAL_FILTER_ENABLED": "true",
+        "LAYA_DECISION_TIMEOUT_MS": "500",
+        "DECAY_HALF_LIFE_DAYS": "30.0",
+        "WORKING_MEMORY_MAX_TOKENS": "2000",
         "LAYA_COMPLEXITY_THRESHOLD": "2",
         "LAYA_FALLBACK_TO_LLM": "true",
         "RECALL_MATCH_THRESHOLD": "0.35",
@@ -277,6 +286,38 @@ curl -X POST "http://localhost:8080/v1/memory/delete" \
        "target_id": "<UUID-OR-NAME>",
        "pillar": "semantic",
        "hard_delete": false,
+       "namespace": "production"
+     }'
+```
+
+### 3.7 Working Context Buffer & Tool Pinning (`/v1/working-memory/*`)
+
+Record a tool output with protected status to prevent Eviction Policy Bug:
+```bash
+curl -X POST "http://localhost:8080/v1/working-memory/tool-output" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "session_id": "sess_agent_123",
+       "tool_call_id": "call_status_456",
+       "tool_name": "check_cluster_health",
+       "content": "STATUS=HEALTHY, REGION=us-east-1, NODES=8",
+       "namespace": "production",
+       "protected": true
+     }'
+```
+
+Retrieve active working context with token budget enforcement (never evicts protected tool outputs):
+```bash
+curl -X GET "http://localhost:8080/v1/working-memory/production/sess_agent_123?max_tokens=1000"
+```
+
+Unprotect a tool output once dependent downstream reasoning completes:
+```bash
+curl -X POST "http://localhost:8080/v1/working-memory/unprotect" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "session_id": "sess_agent_123",
+       "tool_call_id": "call_status_456",
        "namespace": "production"
      }'
 ```

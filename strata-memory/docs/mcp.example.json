@@ -1,0 +1,41 @@
+{
+  "mcpServers": {
+    "strata-memory": {
+      "command": "/Users/dheeban/Documents/my_projects/ai-engineering-lab/strata-memory/.venv/bin/strata-mcp",
+      "args": ["--transport", "stdio"],
+      "env": {
+        "DATABASE_URL": "postgresql://neondb_owner:YOUR_PASSWORD@ep-xyz-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require",
+        "DIRECT_DATABASE_URL": "postgresql://neondb_owner:YOUR_PASSWORD@ep-xyz.ap-southeast-1.aws.neon.tech/neondb?sslmode=require",
+        "DB_STATEMENT_CACHE_SIZE": "0",
+        "NEON_KEEP_ALIVE": "false",
+        "NEON_API_KEY": "",
+        "NEON_PROJECT_ID": "your-project-id",
+        "NEON_ENDPOINT_ID": "ep-xyz",
+        "EMBEDDING_PROVIDER": "ollama",
+        "EMBEDDING_BASE_URL": "http://localhost:11434/v1",
+        "EMBEDDING_API_KEY": "ollama",
+        "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+        "EMBEDDING_DIMENSIONS": "768",
+        "MEMORY_LLM_ENABLED": "true",
+        "MEMORY_LLM_BASE_URL": "http://localhost:11434/v1",
+        "MEMORY_LLM_API_KEY": "ollama",
+        "MEMORY_LLM_MODEL": "qwen3:8b",
+        "MEMORY_LLM_TIMEOUT_SECONDS": "240.0",
+        "LAYA_ENABLED": "true",
+        "LAYA_MODE": "hybrid",
+        "LAYA_OLLAMA_MODEL": "laya:latest",
+        "LAYA_SIGNAL_FILTER_ENABLED": "true",
+        "LAYA_DECISION_TIMEOUT_MS": "500",
+        "LAYA_COMPLEXITY_THRESHOLD": "2",
+        "LAYA_FALLBACK_TO_LLM": "true",
+        "DECAY_HALF_LIFE_DAYS": "30.0",
+        "WORKING_MEMORY_MAX_TOKENS": "2000",
+        "RECALL_MATCH_THRESHOLD": "0.35",
+        "RECALL_MIN_SCORE": "0.0",
+        "ENTITY_SIMILARITY_THRESHOLD": "0.40",
+        "CONTRADICTION_THRESHOLD": "0.94",
+        "STRATA_DEFAULT_NAMESPACE": "default"
+      }
+    }
+  }
+}

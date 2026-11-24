@@ -19,6 +19,9 @@ from strata.models import (
     RecallRequest,
     RecallResponse,
     StoreExplicitRequest,
+    WorkingMemoryAddRequest,
+    WorkingMemoryToolOutputRequest,
+    WorkingMemoryUnprotectRequest,
 )
 from strata.service import (
     svc_memory_delete,
@@ -29,6 +32,11 @@ from strata.service import (
     svc_memory_purge_namespace,
     svc_memory_recall,
     svc_memory_store_explicit,
+    svc_working_memory_add,
+    svc_working_memory_add_tool_output,
+    svc_working_memory_clear,
+    svc_working_memory_get,
+    svc_working_memory_unprotect,
 )
 
 
@@ -79,6 +87,7 @@ async def api_memory_ingest(req: IngestRequest) -> IngestResponse:
             contradiction_threshold=req.contradiction_threshold,
             use_decision_model=req.use_decision_model,
             ttl_seconds=req.ttl_seconds,
+            laya_mode=req.laya_mode,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -185,6 +194,73 @@ async def api_memory_purge_namespace(req: PurgeNamespaceRequest) -> PurgeNamespa
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ============================================================================
+# WORKING MEMORY ENDPOINTS (SHORT-TERM CONTEXT BUFFER)
+# ============================================================================
+
+@app.post("/v1/working-memory/message")
+async def api_working_memory_add(req: WorkingMemoryAddRequest) -> Dict[str, Any]:
+    """Appends an active message to the working context buffer."""
+    return svc_working_memory_add(
+        namespace=req.namespace,
+        session_id=req.session_id,
+        role=req.role,
+        content=req.content,
+        turn_id=req.turn_id,
+        tool_call_id=req.tool_call_id,
+        tool_name=req.tool_name,
+        is_tool_output=req.is_tool_output,
+        protected=req.protected,
+        metadata=req.metadata,
+    )
+
+
+@app.post("/v1/working-memory/tool-output")
+async def api_working_memory_tool_output(req: WorkingMemoryToolOutputRequest) -> Dict[str, Any]:
+    """Records a tool output pinned as protected=True by default."""
+    return svc_working_memory_add_tool_output(
+        namespace=req.namespace,
+        session_id=req.session_id,
+        tool_call_id=req.tool_call_id,
+        tool_name=req.tool_name,
+        content=req.content,
+        protected=req.protected,
+        metadata=req.metadata,
+    )
+
+
+@app.post("/v1/working-memory/unprotect")
+async def api_working_memory_unprotect(req: WorkingMemoryUnprotectRequest) -> Dict[str, Any]:
+    """Unprotects a tool result once downstream dependent reasoning completes."""
+    unprotected = svc_working_memory_unprotect(
+        namespace=req.namespace,
+        session_id=req.session_id,
+        tool_call_id=req.tool_call_id,
+    )
+    return {"unprotected": unprotected}
+
+
+@app.get("/v1/working-memory/{namespace}/{session_id}")
+async def api_working_memory_get(
+    namespace: str,
+    session_id: str,
+    max_tokens: int = None,
+) -> Dict[str, Any]:
+    """Retrieves active working memory items, enforcing budget without evicting protected items."""
+    return svc_working_memory_get(
+        namespace=namespace,
+        session_id=session_id,
+        max_tokens=max_tokens,
+    )
+
+
+@app.delete("/v1/working-memory/{namespace}/{session_id}")
+async def api_working_memory_clear(namespace: str, session_id: str) -> Dict[str, Any]:
+    """Clears working memory for a session."""
+    cleared = svc_working_memory_clear(namespace, session_id)
+    return {"cleared_count": cleared}
 
 
 def main() -> None:

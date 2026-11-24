@@ -275,6 +275,7 @@ async def process_and_ingest(
     contradiction_threshold: Optional[float] = None,
     use_decision_model: Optional[bool] = None,
     ttl_seconds: Optional[int] = None,
+    laya_mode: Optional[str] = None,
 ) -> IngestResponse:
     """Routes incoming raw text across the 4 memory pillars using Laya Decision Engine
     and the Small Decision LLM, with graceful deterministic fallback."""
@@ -294,11 +295,13 @@ async def process_and_ingest(
     context_data = await prefetch_relevant_context(raw_text, raw_embedding, namespace)
 
     # Step 2: Evaluate with Laya Decision Model if enabled
-    decision_enabled = (
-        use_decision_model
-        if use_decision_model is not None
-        else settings.laya_enabled
-    )
+    effective_laya_mode = laya_mode or getattr(settings, "laya_mode", "hybrid")
+    if effective_laya_mode == "disabled":
+        decision_enabled = False
+    elif use_decision_model is not None:
+        decision_enabled = use_decision_model
+    else:
+        decision_enabled = settings.laya_enabled
 
     if decision_enabled:
         try:
@@ -307,7 +310,29 @@ async def process_and_ingest(
                 raw_embedding=raw_embedding,
                 context_data=context_data,
                 contradiction_threshold=contradiction_threshold,
+                mode=effective_laya_mode,
             )
+
+            # Write Policy Gate (Agent Memory Architect): Reject low-signal conversational filler before DB persistence
+            if not decision.is_signal:
+                logger.info(
+                    f"Write Policy Gate (Laya): Dropped low-signal filler '{raw_text[:30]}' (confidence: {decision.confidence:.2f})"
+                )
+                return IngestResponse(
+                    success=True,
+                    namespace=namespace,
+                    fast_mode=False,
+                    created_ids=[],
+                    superseded_ids=[],
+                    details={
+                        "mode": "laya_signal_filtered",
+                        "is_signal": False,
+                        "primary_pillar": decision.primary_pillar,
+                        "confidence": decision.confidence,
+                        "signals": decision.signals,
+                    },
+                )
+
             # If Laya classifies as simple, execute plan directly (Zero-LLM fast path)
             if decision.complexity == "simple" and decision.extraction_plan:
                 logger.info(

@@ -43,7 +43,7 @@ async def add_or_supersede_semantic(
         # Auto-detect near-duplicate or contradictory memory if not explicitly provided
         if supersede_memory_id is None:
             check_sql = """
-                SELECT memory_id
+                SELECT memory_id, (1.0 - (embedding <=> $2::vector(768))) AS sim
                 FROM memories
                 WHERE namespace = $1
                   AND type = 'semantic'
@@ -54,6 +54,25 @@ async def add_or_supersede_semantic(
             """
             row = await c.fetchrow(check_sql, namespace, vec_str, threshold)
             if row:
+                sim = float(row["sim"])
+                summary_lower = summary.lower()
+                is_update_intent = any(
+                    k in summary_lower for k in ["update", "changed", "instead of", "no longer", "replaced", "supersede"]
+                )
+                # Fact Reaffirmation (Agent Memory Architect): If identical/near-identical fact (sim >= 0.96) without update intent
+                # Reaffirm the existing fact by bumping access_count and resetting reaffirmed_at = NOW() (half-life decay reset)
+                if sim >= 0.96 and not is_update_intent:
+                    existing_id = str(row["memory_id"])
+                    await c.execute(
+                        """
+                        UPDATE memories
+                        SET reaffirmed_at = NOW(), access_count = access_count + 1
+                        WHERE memory_id = $1;
+                        """,
+                        row["memory_id"],
+                    )
+                    return existing_id, None
+
                 supersede_memory_id = str(row["memory_id"])
 
         insert_sql = """

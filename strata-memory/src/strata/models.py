@@ -118,7 +118,7 @@ class EntityGraphItem(BaseModel):
 class RecallRequest(BaseModel):
     query: str
     namespace: str = "default"
-    pillars: List[str] = Field(default_factory=lambda: ["semantic", "episodic", "procedural", "entity"])
+    pillars: Optional[List[str]] = None
     top_k: int = 5
     token_budget: int = 1500
     match_threshold: Optional[float] = None
@@ -149,6 +149,36 @@ class IngestRequest(BaseModel):
     ttl_seconds: Optional[int] = None
     contradiction_threshold: Optional[float] = None
     use_decision_model: Optional[bool] = None
+    laya_mode: Optional[str] = None
+
+
+class WorkingMemoryAddRequest(BaseModel):
+    namespace: str = "default"
+    session_id: str
+    role: str
+    content: str
+    turn_id: Optional[int] = None
+    tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    is_tool_output: bool = False
+    protected: bool = False
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkingMemoryToolOutputRequest(BaseModel):
+    namespace: str = "default"
+    session_id: str
+    tool_call_id: str
+    tool_name: str
+    content: str
+    protected: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkingMemoryUnprotectRequest(BaseModel):
+    namespace: str = "default"
+    session_id: str
+    tool_call_id: str
 
 
 class IngestResponse(BaseModel):

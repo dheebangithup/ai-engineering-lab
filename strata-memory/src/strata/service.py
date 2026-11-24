@@ -45,6 +45,7 @@ from strata.pillars.semantic import (
     delete_semantic,
 )
 from strata.recall import memory_recall_internal
+from strata.working_memory import working_memory
 
 logger = logging.getLogger("strata.service")
 
@@ -57,6 +58,7 @@ async def svc_memory_ingest(
     contradiction_threshold: Optional[float] = None,
     use_decision_model: Optional[bool] = None,
     ttl_seconds: Optional[int] = None,
+    laya_mode: Optional[str] = None,
 ) -> IngestResponse:
     """Autonomous 4-pillar extraction & storage using Laya Decision Engine and Small LLM."""
     return await process_and_ingest(
@@ -67,6 +69,7 @@ async def svc_memory_ingest(
         contradiction_threshold=contradiction_threshold,
         use_decision_model=use_decision_model,
         ttl_seconds=ttl_seconds,
+        laya_mode=laya_mode,
     )
 
 
@@ -80,9 +83,8 @@ async def svc_memory_recall(
     min_score: Optional[float] = None,
     similarity_threshold: Optional[float] = None,
 ) -> RecallResponse:
-    """Zero-LLM deterministic hybrid RRF + graph + procedural retrieval."""
-    if pillars is None:
-        pillars = ["semantic", "episodic", "procedural", "entity"]
+    """Zero-LLM deterministic hybrid RRF + graph + procedural retrieval.
+    If pillars is None, Laya dynamically selects the relevant pillars based on query intent."""
     req = RecallRequest(
         query=query,
         namespace=namespace,
@@ -591,3 +593,117 @@ async def svc_memory_purge_namespace(
         purged=True,
         deleted_counts=counts,
     )
+
+
+# ============================================================================
+# WORKING MEMORY (SHORT-TERM CONTEXT & TOOL OUTPUT PINNING)
+# ============================================================================
+
+def svc_working_memory_add(
+    namespace: str,
+    session_id: str,
+    role: str,
+    content: str,
+    turn_id: Optional[int] = None,
+    tool_call_id: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    is_tool_output: bool = False,
+    protected: bool = False,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Adds a message to the active working memory buffer."""
+    item = working_memory.add_message(
+        namespace=namespace,
+        session_id=session_id,
+        role=role,
+        content=content,
+        turn_id=turn_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        is_tool_output=is_tool_output,
+        protected=protected,
+        metadata=metadata,
+    )
+    return {
+        "item_id": item.item_id,
+        "session_id": item.session_id,
+        "turn_id": item.turn_id,
+        "role": item.role,
+        "protected": item.protected,
+        "token_count": item.token_count,
+    }
+
+
+def svc_working_memory_add_tool_output(
+    namespace: str,
+    session_id: str,
+    tool_call_id: str,
+    tool_name: str,
+    content: str,
+    protected: bool = True,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Adds a tool execution result, pinned as protected=True by default to eliminate Eviction Policy Bug."""
+    item = working_memory.add_tool_output(
+        namespace=namespace,
+        session_id=session_id,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        content=content,
+        protected=protected,
+        metadata=metadata,
+    )
+    return {
+        "item_id": item.item_id,
+        "session_id": item.session_id,
+        "turn_id": item.turn_id,
+        "tool_call_id": item.tool_call_id,
+        "tool_name": item.tool_name,
+        "protected": item.protected,
+        "token_count": item.token_count,
+    }
+
+
+def svc_working_memory_unprotect(
+    namespace: str,
+    session_id: str,
+    tool_call_id: str,
+) -> bool:
+    """Unprotects a tool result once dependent reasoning finishes, allowing eviction if needed."""
+    return working_memory.unprotect_tool(namespace, session_id, tool_call_id)
+
+
+def svc_working_memory_get(
+    namespace: str,
+    session_id: str,
+    max_tokens: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Returns active working memory items, enforcing max_tokens budget if specified (never evicting protected items)."""
+    if max_tokens is not None:
+        items = working_memory.enforce_budget(namespace, session_id, max_tokens)
+    else:
+        items = working_memory.get_items(namespace, session_id)
+    return {
+        "namespace": namespace,
+        "session_id": session_id,
+        "item_count": len(items),
+        "total_tokens": sum(i.token_count for i in items),
+        "items": [
+            {
+                "item_id": i.item_id,
+                "turn_id": i.turn_id,
+                "role": i.role,
+                "content": i.content,
+                "tool_call_id": i.tool_call_id,
+                "tool_name": i.tool_name,
+                "protected": i.protected,
+                "token_count": i.token_count,
+            }
+            for i in items
+        ],
+    }
+
+
+def svc_working_memory_clear(namespace: str, session_id: str) -> int:
+    """Clears working memory for a given session."""
+    return working_memory.clear(namespace, session_id)

@@ -29,7 +29,7 @@ Deterministic, multi-pillar recall engine that fuses vector cosine similarity, f
 |---|---|---|---|---|
 | `query` | `string` | **Yes** | — | Search query text used for both FastEmbed embedding and Postgres `websearch_to_tsquery`. |
 | `namespace` | `string` | No | `"default"` | Multi-tenancy filter. Constrains search to memories within this isolated namespace. |
-| `pillars` | `List[string]` | No | `["semantic", "episodic", "procedural", "entity"]` | **Pillar Filter.** Restricts recall to any combination of: `"semantic"`, `"episodic"`, `"procedural"`, `"entity"`. |
+| `pillars` | `List[string]` | No | `None` (Dynamic Laya Intent Classification) | **Pillar Filter.** When omitted, Laya automatically detects query intent. Explicitly pass any combination of: `"semantic"`, `"episodic"`, `"procedural"`, `"entity"`, or `"all"`. |
 | `top_k` | `integer` | No | `5` | Maximum number of candidate items returned per pillar. |
 | `token_budget` | `integer` | No | `1500` | Maximum token budget for the generated `<strata_memory_context>` XML block (computed as `chars // 4`). Truncation preserves XML tag validity. |
 | `match_threshold` | `float` | No | `0.35` | Vector cosine similarity cutoff threshold in `hybrid_memory_search()`. |
@@ -38,14 +38,17 @@ Deterministic, multi-pillar recall engine that fuses vector cosine similarity, f
 
 ### Internal Ranking & Filtering Logic
 
-1. **Semantic & Episodic Ranking (Reciprocal Rank Fusion - RRF):**
+1. **Semantic & Episodic Ranking (Reciprocal Rank Fusion with 30-Day Half-Life Decay):**
    ```sql
-   Score = (1.0 / (60.0 + rank_vector)) + (1.0 / (60.0 + rank_bm25)) + (utility_boost)
+   Score = ( (1.0 / (60.0 + rank_vector)) + (1.0 / (60.0 + rank_bm25)) )
+           * ( 0.65 + 0.35 * POWER(0.5, ((EXTRACT(EPOCH FROM (NOW() - COALESCE(reaffirmed_at, created_at))) / 86400.0) / 30.0)) )
+           + (utility_boost)
    ```
    - `rank_vector`: Derived from HNSW cosine distance `(m.embedding <=> query_vec)`. Match threshold: `similarity >= 0.35`.
    - `rank_bm25`: Derived from `ts_rank_cd(to_tsvector('english', summary), websearch_to_tsquery('english', query))`.
+   - `decay_multiplier`: Facts decay with a 30-day half life. When re-observed, `reaffirmed_at` is updated to `NOW()`, resetting decay to 1.00.
    - `utility_boost`: `LEAST(GREATEST(utility_score, -5), 20) * 0.001` (Memories proven useful gain higher rank).
-   - Filter: `valid_until IS NULL` (only active facts are returned; superseded facts are omitted).
+   - Filter: `(valid_until IS NULL OR valid_until > NOW())` (only active unexpired facts are returned).
 2. **Procedural Ranking (Bayesian Skill Scoring):**
    ```text
    Score = 0.75 * (1.0 - CosineDistance) + 0.25 * ((success_count + 1) / (success_count + fail_count + 2))
@@ -138,6 +141,12 @@ Takes raw, unstructured text from an agent conversation or log, pre-fetches simi
 | `source_id` | `string` | No | `null` | Optional external reference ID (e.g., chat message ID, git commit hash, file path). |
 | `contradiction_threshold` | `float` | No | `0.94` | Cosine similarity threshold above which near-duplicate facts are superseded. |
 | `use_decision_model` | `boolean` | No | `true` | Toggle Laya Decision Engine pre-routing (if `false`, routes directly to Small LLM). |
+| `laya_mode` | `string` | No | `"hybrid"` | Runtime control for Laya Decision Engine: `"hybrid"`, `"in_memory"`, `"ollama_model"`, or `"disabled"`. |
+| `ttl_seconds` | `integer` | No | `null` | Optional time-to-live in seconds. Stored memory soft-expires after this duration. |
+
+### Write Policy Signal Gating & Fact Reaffirmation
+- **Signal Gating:** If `raw_text` is conversational filler (e.g., "thanks, got it!", "okay", "cool"), the Write Policy Gate drops it before database writes, returning `mode: "laya_signal_filtered"` with 0 created records.
+- **Fact Reaffirmation:** If an identical or near-identical fact ($\text{similarity} \ge 0.96$) is ingested without update intent, Strata updates `reaffirmed_at = NOW()` and increments `access_count`, resetting its 30-day half-life decay without creating duplicate database rows.
 
 ### Response Schema
 ```json
@@ -429,6 +438,23 @@ To eliminate idle compute spend on Neon Serverless PostgreSQL, Strata features a
    ```
 4. Neon immediately transitions the compute from `active` to `suspended`, stopping all billable compute seconds until the next call arrives.
 
+---
+
+## 9. Short-Term Working Memory Operations (`/v1/working-memory/*` & FastMCP)
+
+The short-term working context buffer manages in-flight conversational turns and protects active tool results to eliminate the **Eviction Policy Bug**.
+
+### Methods & Endpoints
+
+| Operation | FastMCP Tool | REST Route | Description |
+|---|---|---|---|
+| **Record Tool Output** | `working_memory_record_tool_output` | `POST /v1/working-memory/tool-output` | Pins tool output with `protected=True` so it survives budget eviction until downstream reasoning completes. |
+| **Unprotect Tool Output** | `working_memory_unprotect` | `POST /v1/working-memory/unprotect` | Unpins a tool output once dependent steps have completed. |
+| **Get Active Context** | `working_memory_get_context` | `GET /v1/working-memory/{namespace}/{session_id}` | Retrieves turns; applies `max_tokens` budget, evicting non-protected items first. |
+
+---
+
+## 10. Multi-Tenancy Namespacing & Isolation Guarantee
 
 Every table and query in Strata is partitioned by `namespace` (default: `"default"`).
 

@@ -36,6 +36,10 @@ class StrataSettings(BaseSettings):
 
     # Laya Decision Model Pre-routing Controls
     laya_enabled: bool = True
+    laya_mode: str = "hybrid"  # "hybrid" | "in_memory" | "ollama_model" | "disabled"
+    laya_ollama_model: str = "laya:latest"
+    laya_signal_filter_enabled: bool = True
+    laya_decision_timeout_ms: int = 500
     laya_complexity_threshold: int = 2
     laya_fallback_to_llm: bool = True
 
@@ -49,7 +53,9 @@ class StrataSettings(BaseSettings):
     strata_api_host: str = "0.0.0.0"
     strata_api_port: int = 8080
 
-    # Memory Lifecycle & Retention Policies
+    # Memory Lifecycle & Retention Policies (Agent Memory Architect)
+    decay_half_life_days: float = 30.0            # 30-day half-life decay on un-reaffirmed facts
+    working_memory_max_tokens: int = 2000         # Short-term working context budget cap
     episodic_default_ttl_days: Optional[int] = 30  # Default days before episodic memory soft-expires (None = indefinite)
     superseded_retention_days: int = 90             # Days to retain superseded/soft-deleted rows before hard purge
     toxic_utility_threshold: int = -5              # Memories at or below this score are automatically retired

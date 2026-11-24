@@ -19,8 +19,11 @@ CREATE TABLE IF NOT EXISTS memories (
     superseded_by UUID REFERENCES memories(memory_id) ON DELETE SET NULL,
     valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     valid_until TIMESTAMPTZ DEFAULT NULL, -- NULL means currently active/valid
+    reaffirmed_at TIMESTAMPTZ DEFAULT NULL, -- When fact was confirmed or refreshed (Half-Life Decay)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS reaffirmed_at TIMESTAMPTZ DEFAULT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_memories_ns_type_valid_until
     ON memories (namespace, type, valid_until);
@@ -163,6 +166,7 @@ BEGIN
             m.utility_score,
             m.confidence,
             m.created_at,
+            m.reaffirmed_at,
             ROW_NUMBER() OVER (ORDER BY (m.embedding <=> query_embedding) ASC) AS rank_vec
         FROM memories m
         WHERE m.namespace = target_namespace
@@ -181,6 +185,7 @@ BEGIN
             m.utility_score,
             m.confidence,
             m.created_at,
+            m.reaffirmed_at,
             ROW_NUMBER() OVER (
                 ORDER BY ts_rank_cd(
                     to_tsvector('english', m.summary),
@@ -206,8 +211,12 @@ BEGIN
             COALESCE(v.confidence, t.confidence) AS confidence,
             COALESCE(v.created_at, t.created_at) AS created_at,
             (
-                COALESCE(1.0 / (60.0 + v.rank_vec), 0.0) +
-                COALESCE(1.0 / (60.0 + t.rank_txt), 0.0) +
+                (
+                    COALESCE(1.0 / (60.0 + v.rank_vec), 0.0) +
+                    COALESCE(1.0 / (60.0 + t.rank_txt), 0.0)
+                ) * (
+                    0.65 + 0.35 * POWER(0.5, (EXTRACT(EPOCH FROM (NOW() - COALESCE(COALESCE(v.reaffirmed_at, t.reaffirmed_at), COALESCE(v.created_at, t.created_at)))) / 86400.0) / 30.0)
+                ) +
                 (LEAST(GREATEST(COALESCE(v.utility_score, t.utility_score), -5), 20) * 0.001)
             )::FLOAT AS score
         FROM vector_matches v

@@ -14,12 +14,12 @@ if [ -f ".venv/bin/activate" ]; then
 fi
 
 echo ""
-echo "▶ STEP 1/3: Running Pytest Unit & Integration Tests (18 test cases)..."
+echo "▶ STEP 1/3: Running Pytest Unit & Integration Tests (23 test cases)..."
 echo "--------------------------------------------------------------------------------"
 pytest tests/test_*.py -v
 
 echo ""
-echo "▶ STEP 2/3: Running Comprehensive 12-Case Evaluation Pipeline (eval_dedicated_suite)..."
+echo "▶ STEP 2/3: Running Comprehensive 15-Case Evaluation Pipeline (eval_dedicated_suite)..."
 echo "--------------------------------------------------------------------------------"
 python tests/eval_pipeline.py
 

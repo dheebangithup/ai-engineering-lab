@@ -6,6 +6,7 @@ from uuid import UUID
 from strata.config import settings
 from strata.db import get_db_pool
 from strata.embedder import LocalEmbedder
+from strata.laya import laya_engine
 from strata.models import (
     EntityGraphItem,
     EpisodicMemoryItem,
@@ -159,7 +160,14 @@ async def memory_recall_internal(req: RecallRequest) -> RecallResponse:
     embedder = LocalEmbedder.get_instance()
     query_embedding = await embedder.embed_one(req.query)
 
-    pillars = set(req.pillars)
+    # Retrieval Policy Gate: If pillars not specified or set to 'auto', dynamically route using Laya intent classification
+    if not req.pillars or "auto" in req.pillars:
+        dynamic_pillars = laya_engine.classify_query_intent(req.query)
+        pillars = set(dynamic_pillars)
+    elif "all" in req.pillars:
+        pillars = {"semantic", "episodic", "procedural", "entity"}
+    else:
+        pillars = set(req.pillars)
     tasks = []
 
     # 1. Semantic & Episodic search
