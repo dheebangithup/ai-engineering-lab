@@ -1,9 +1,17 @@
+from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_PACKAGE_ENV = _REPO_ROOT / ".env"
+
 
 class StrataSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env", str(_PACKAGE_ENV)),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     database_url: str = "postgresql://strata_user:strata_password@localhost:5432/strata"
     direct_database_url: Optional[str] = None

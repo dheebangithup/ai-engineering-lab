@@ -77,17 +77,28 @@ async def get_db_pool() -> asyncpg.Pool:
         logger.info("Initializing asyncpg pool for Neon Postgres...")
 
         # Neon with PgBouncer requires statement_cache_size=0
-        _pool = await asyncpg.create_pool(
-            dsn=dsn,
-            min_size=settings.db_pool_min_size,
-            max_size=settings.db_pool_max_size,
-            statement_cache_size=settings.db_statement_cache_size,
-            max_inactive_connection_lifetime=300.0,
-            init=init_connection,
-            command_timeout=30.0,
-        )
-        _pool_loop = curr_loop
-        logger.info("Neon database connection pool established.")
+        try:
+            _pool = await asyncpg.create_pool(
+                dsn=dsn,
+                min_size=settings.db_pool_min_size,
+                max_size=settings.db_pool_max_size,
+                statement_cache_size=settings.db_statement_cache_size,
+                max_inactive_connection_lifetime=300.0,
+                init=init_connection,
+                command_timeout=30.0,
+            )
+            _pool_loop = curr_loop
+            logger.info("Neon database connection pool established.")
+        except Exception as exc:
+            parsed = urlparse(dsn)
+            host = parsed.hostname or "unknown"
+            port = parsed.port or 5432
+            logger.error(
+                f"Failed to connect to PostgreSQL database at {host}:{port}. "
+                f"Please ensure DATABASE_URL is set in your environment and points to an active Neon Postgres instance. "
+                f"Details: {exc}"
+            )
+            raise
     return _pool
 
 
