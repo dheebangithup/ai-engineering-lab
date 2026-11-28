@@ -219,6 +219,13 @@ curl -s http://localhost:8000/ready
 # 4. Verify Auth Protection on /mcp (should return 401 without token)
 curl -i http://localhost:8000/mcp
 # Response: HTTP 401 Unauthorized
+
+# 5. Check Web UI Dashboard & REST API
+curl -s http://localhost:8000/
+# Response: Strata Memory Studio HTML
+
+curl -s http://localhost:8000/v1/ui/stats
+# Response: {"namespaces":["default",...],"semantic":{"active":...}}
 ```
 
 ---

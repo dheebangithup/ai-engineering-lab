@@ -1,4 +1,22 @@
 # syntax=docker/dockerfile:1
+# -----------------------------------------------------------------------------
+# Stage 1: Build the React Vite Studio UI
+# -----------------------------------------------------------------------------
+FROM node:20-slim AS ui-builder
+
+WORKDIR /app/ui
+
+# Install dependencies using clean install
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+
+# Copy UI source code and build production bundle
+COPY ui/ ./
+RUN npm run build
+
+# -----------------------------------------------------------------------------
+# Stage 2: Production Python Runtime
+# -----------------------------------------------------------------------------
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -18,10 +36,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy build metadata and source code
+# Copy build metadata, SQL schemas, and backend source
 COPY pyproject.toml README.md ./
 COPY sql ./sql
 COPY src ./src
+
+# Copy built UI static bundle from Stage 1
+COPY --from=ui-builder /app/ui/dist ./ui/dist
 
 # Install package and runtime dependencies non-editably
 RUN pip install --upgrade pip && pip install .

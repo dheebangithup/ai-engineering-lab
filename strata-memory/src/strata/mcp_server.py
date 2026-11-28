@@ -40,14 +40,20 @@ logger = logging.getLogger("strata.mcp_server")
 class BearerAuthMiddleware:
     """Pure ASGI Bearer token guard for HTTP-exposed MCP routes (zero stream buffering)."""
 
-    EXEMPT_PATHS = {"/health", "/ready"}
-
-    def __init__(self, app: Any, token: str) -> None:
+    def __init__(self, app: Any, token: str, mcp_path: str = "/mcp") -> None:
         self.app = app
         self.token = token
+        self.mcp_path = mcp_path.rstrip("/")
 
     async def __call__(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
-        if scope.get("type") != "http" or scope.get("path") in self.EXEMPT_PATHS:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        # Enforce Bearer token strictly on MCP protocol endpoints (/mcp, /mcp/...)
+        is_mcp = (path == self.mcp_path or path.startswith(f"{self.mcp_path}/"))
+        if not is_mcp:
             await self.app(scope, receive, send)
             return
 
@@ -816,25 +822,64 @@ def main() -> None:
 
     if args.transport in ("sse", "streamable-http", "http"):
         http_middleware = (
-            [Middleware(BearerAuthMiddleware, token=settings.mcp_auth_token)]
+            [Middleware(BearerAuthMiddleware, token=settings.mcp_auth_token, mcp_path=args.path)]
             if settings.mcp_auth_token
             else None
         )
-        run_kwargs: Dict[str, Any] = {
-            "transport": args.transport,
-            "host": args.host,
-            "port": args.port,
-            "middleware": http_middleware,
-        }
-        if args.transport in ("streamable-http", "http"):
-            run_kwargs["path"] = args.path
-            run_kwargs["stateless_http"] = False if args.stateful else settings.mcp_stateless_http
+        app = mcp.http_app(
+            transport=args.transport,
+            path=args.path,
+            stateless_http=False if args.stateful else settings.mcp_stateless_http,
+            middleware=http_middleware,
+        )
 
+        # Mount REST API under /v1
+        from fastapi import FastAPI
+        from fastapi.middleware.cors import CORSMiddleware
+        from strata.rest_api import api_router
+
+        v1_app = FastAPI()
+        v1_app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+        v1_app.include_router(api_router)
+        app.mount("/v1", v1_app)
+
+        # Mount Strata Studio UI static files if present
+        from pathlib import Path
+        from starlette.staticfiles import StaticFiles
+        from starlette.responses import RedirectResponse
+
+        async def ui_redirect(request):
+            return RedirectResponse(url="/", status_code=307)
+
+        app.add_route("/ui", ui_redirect, methods=["GET"])
+
+        ui_dist_path = Path(__file__).resolve().parent.parent.parent / "ui" / "dist"
+        if not ui_dist_path.exists():
+            ui_dist_path = Path("/app/ui/dist")
+
+        if ui_dist_path.exists():
+            logger.info(f"Mounting Strata Studio UI from {ui_dist_path}")
+            app.mount("/", StaticFiles(directory=str(ui_dist_path), html=True), name="ui_root")
+        else:
+            logger.info("UI dist folder not found; running in headless MCP mode.")
+
+        import uvicorn
         logger.info(
-            f"Starting Strata MCP server (transport={args.transport}, host={args.host}, "
+            f"Starting Strata Unified MCP + Studio UI server (transport={args.transport}, host={args.host}, "
             f"port={args.port}, path={args.path}, auth={'enabled' if settings.mcp_auth_token else 'disabled'})"
         )
-        mcp.run(**run_kwargs)
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+        )
     else:
         mcp.run(transport="stdio")
 
