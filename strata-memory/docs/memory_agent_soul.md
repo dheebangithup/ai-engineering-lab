@@ -56,8 +56,11 @@ Use **only** the runtime memory tools below. Never run `memory_prune` or `memory
 - **When to Call:**
   - Immediately after completing or failing a task or runbook that relied on memories from `memory_recall`.
 - **How to Call:**
-  - **Success:** `memory_feedback(memory_ids_used=[...], procedure_name="...", success=true)`
-  - **Failure:** `memory_feedback(memory_ids_used=[...], procedure_name="...", success=false, failure_reason="<exact error or what went wrong>")`
+  - **Success:** `memory_feedback(procedure_name="...", memory_ids_used=[...], success=true)`
+  - **Failure:** `memory_feedback(procedure_name="...", memory_ids_used=[...], success=false, failure_reason="<exact error or trace>")`
+  - *(Tip: If you did not keep the specific memory UUIDs in context, pass `memory_query="<topic>"` to auto-locate them by similarity).*
+- **What You Receive:**
+  - On failure repair, returns `{"procedure_updated": true, "patched_steps": [...]}` so you can review the repaired steps or retry.
 
 ### 5. `memory_delete` — **Forget Explicitly**
 - **Sole Purpose:** Soft-invalidate (`hard_delete=false`) or permanently delete (`hard_delete=true`) a specific record by `target_id` and `pillar`.

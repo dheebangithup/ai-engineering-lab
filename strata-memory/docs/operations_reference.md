@@ -306,38 +306,86 @@ Allows agents to modify or supersede an existing memory using natural language i
 
 ## 5. `memory_feedback` (Reinforcement Learning & Auto-Patching)
 
-Closes the loop between memory recall and task execution.
+Closes the loop between memory recall and downstream task execution by reinforcing helpful memories, penalizing misleading ones, and autonomously healing failed procedure runbooks.
 
 ### Parameters & Option Filters
 
 | Parameter | Type | Required? | Default | Description |
 |---|---|---|---|---|
+| `procedure_name` | `string` | No | `null` | Exact name of the procedural skill or runbook executed by the agent (e.g. `"deploy_to_neon"`). |
+| `success` | `boolean` | No | `true` | Whether the agent's task execution succeeded (`true`) or failed (`false`). |
+| `failure_reason` | `string` | No | `null` | Detailed error trace, terminal output, or diagnostic reason explaining why the procedure failed. **Triggers LLM auto-patching when `success == false`.** |
 | `memory_ids_used` | `List[string]` | No | `[]` | List of UUIDs of memories that assisted the agent. |
-| `procedure_name` | `string` | No | `null` | Name of the procedure executed by the agent. |
-| `success` | `boolean` | No | `true` | Whether the agent's task succeeded or failed. |
-| `failure_reason` | `string` | No | `null` | Error trace or explanation of why the task failed. |
-| `namespace` | `string` | No | `"default"` | Namespace partition. |
+| `memory_query` | `string` | No | `null` | **Intelligent Auto-Location:** If `memory_ids_used` is not tracked or empty, Strata uses vector similarity on this search phrase to auto-locate the top active memory and update its utility. |
+| `namespace` | `string` | No | `"default"` | Multi-tenancy namespace partition. |
 
 ### Behavior & Scoring Rules
 
-1. **Utility Score Updates:**
-   - If `success == true`: `utility_score = utility_score + 1` for all `memory_ids_used`.
-   - If `success == false`: `utility_score = utility_score - 2` for all `memory_ids_used`.
-   - Clamped in RRF between `[-5, +20]`.
-2. **Procedural Success/Failure Counter:**
-   - If `success == true`: `success_count = success_count + 1`.
-   - If `success == false`: `fail_count = fail_count + 1`.
-3. **Automated Self-Healing / Runbook Patching:**
-   - If `success == false` and `failure_reason` is supplied, the Small LLM inspects the failed procedure's existing `steps[]` and the `failure_reason`, generates a revised `steps[]` array, bumps the procedure `version = version + 1`, and logs the repair to `changelog`.
+1. **Utility Score & Recency Reinforcement (Semantic & Episodic):**
+   - **On Success (`success == true`):**
+     - `utility_score = utility_score + 1` (clamped between `[-5, +20]`).
+     - `access_count = access_count + 1`.
+     - `reaffirmed_at = NOW()`: Resets the 30-day Ebbinghaus half-life decay multiplier back to `1.0`.
+     - `confidence = LEAST(1.0, confidence + 0.05)`.
+   - **On Failure (`success == false`):**
+     - `utility_score = utility_score - 2` (demotes the memory in hybrid RRF search).
+     - `confidence = GREATEST(0.1, confidence - 0.20)`. Memories dropping below toxic threshold are marked for pruning.
 
-### Example Payload (Reporting a Failure with Auto-Patching)
+2. **Procedural Success/Failure Counter:**
+   - If `success == true`: Increments `success_count = success_count + 1`. Increases the procedure's Bayesian composite score:
+     $$\text{Composite Score} = 0.75 \times (1 - \text{CosineDist}) + 0.25 \times \left(\frac{\text{success\_count} + 1}{\text{success\_count} + \text{fail\_count} + 2}\right)$$
+   - If `success == false`: Increments `fail_count = fail_count + 1`.
+
+3. **Automated Self-Healing / Runbook Patching (When `success == false` + `failure_reason`):**
+   - **Step 1:** Strata fetches the existing `steps[]` of the named procedure from Neon Postgres.
+   - **Step 2:** The Memory-Side Small LLM (`patch_procedure_with_llm` in `router.py`) receives the procedure name, existing steps, and the exact error trace.
+   - **Step 3:** The LLM produces a surgical patch (e.g., adding a preflight check, fixing flags, or re-ordering steps).
+   - **Step 4:** Atomic commit bumps `version = version + 1`, stores the new `steps[]`, and appends an entry to `changelog`:
+     ```json
+     {
+       "version": 2,
+       "timestamp": "2026-11-28T17:30:00Z",
+       "reason": "Auto-patched after failure: asyncpg prepared statement collision on -pooler endpoint"
+     }
+     ```
+   - **Step 5:** Returns the revised steps to the agent immediately.
+
+### Example Payloads
+
+#### A. Reporting a Successful Task Execution
 ```json
 {
-  "memory_ids_used": ["9158729e-356d-4998-b74e-30a44a4b8a65"],
   "procedure_name": "deploy_neon_service",
+  "memory_ids_used": ["9158729e-356d-4998-b74e-30a44a4b8a65"],
+  "success": true,
+  "namespace": "production"
+}
+```
+
+#### B. Reporting a Failure with Automated Runbook Auto-Patching
+```json
+{
+  "procedure_name": "deploy_neon_service",
+  "memory_ids_used": ["9158729e-356d-4998-b74e-30a44a4b8a65"],
   "success": false,
   "failure_reason": "asyncpg threw prepared statement error because statement_cache_size was not 0 on Neon -pooler endpoint.",
   "namespace": "production"
+}
+```
+
+#### Expected Response on Auto-Patch:
+```json
+{
+  "status": "feedback_recorded",
+  "success": false,
+  "memories_updated_count": 1,
+  "memory_ids_updated": ["9158729e-356d-4998-b74e-30a44a4b8a65"],
+  "procedure_updated": true,
+  "patched_steps": [
+    "Run database migration script 001_init_schema.sql",
+    "Configure asyncpg connection pool with statement_cache_size=0 for Neon pooler",
+    "Verify pgvector extension and scale-to-zero compute suspension"
+  ]
 }
 ```
 

@@ -499,6 +499,95 @@ You are equipped with Strata, a 4-pillar long-term memory engine backed by Neon 
      - Failure: Call `memory_feedback(memory_ids_used=[...], procedure_name="...", success=false, failure_reason="<exact error trace>")` so Strata can penalize bad memories and auto-patch the procedure steps.
 ```
 
+### 6.3 Procedure Feedback & Self-Healing: Agent Operational Guide
+
+The `memory_feedback` tool closes the reinforcement loop. It ensures your agent doesn't repeat the same mistakes by auto-healing failed runbooks and boosting proven knowledge.
+
+#### Input Arguments Description
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `procedure_name` | `string` | Optional* | Name of the procedure/runbook that was executed (e.g., `"deploy_neon_service"`). *Required if reporting procedure success or failure.* |
+| `success` | `boolean` | **Yes** (default: `true`) | Set to `true` if the task/workflow completed successfully; set to `false` if an error occurred. |
+| `failure_reason` | `string` | Optional* | The exact terminal error message, HTTP error, or exception stack trace. *Required when `success=false` to trigger automatic procedure repair.* |
+| `memory_ids_used` | `List[string]` | Optional | List of memory UUIDs returned from `memory_recall` that informed the agent's actions. |
+| `memory_query` | `string` | Optional | Search query or topic to auto-locate memories by vector similarity if specific UUIDs were not retained in working context. |
+| `namespace` | `string` | Optional | Multi-tenancy namespace partition (default: `"default"`). |
+
+#### Lifecycle: From Error to Self-Healed Runbook
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Agent as Autonomous Agent
+    participant Strata as Strata Memory (MCP / REST)
+    participant LLM as Memory Small LLM
+    participant DB as Neon Postgres
+
+    User->>Agent: "Deploy service to Neon staging"
+    Agent->>Strata: memory_recall(query="deploy service to neon")
+    Strata-->>Agent: Returns Procedure v1.0 steps
+    Agent->>Agent: Executes steps in bash/terminal...
+    Note over Agent: Step 2 throws error: "prepared statement collision"
+    Agent->>Strata: memory_feedback(procedure_name="deploy_neon", success=false, failure_reason="prepared statement collision...")
+    Strata->>LLM: patch_procedure_with_llm(name, steps, error)
+    LLM-->>Strata: Returns patched steps (adds statement_cache_size=0)
+    Strata->>DB: Atomic commit: version=2, updated steps, changelog logged
+    Strata-->>Agent: Returns {status: "feedback_recorded", procedure_updated: true, patched_steps: [...]}
+    Note over Agent: Agent retries immediately with patched steps!
+    Agent->>User: "Fixed deployment step and successfully deployed v2.0."
+```
+
+#### Example Python Implementation for Agents
+
+```python
+from strata.service import svc_memory_feedback, svc_memory_recall
+
+async def execute_task_with_memory_loop(task_query: str, namespace: str = "default"):
+    # 1. Recall relevant procedure or facts
+    recall_res = await svc_memory_recall(query=task_query, namespace=namespace)
+    
+    procedure = recall_res.procedures[0] if recall_res.procedures else None
+    memory_ids = [m.memory_id for m in recall_res.semantic]
+    
+    if not procedure:
+        return "No runbook found."
+
+    # 2. Execute procedure steps
+    try:
+        for step in procedure.steps:
+            # execute_step_in_sandbox(step)
+            pass
+            
+        # 3a. Report Success Feedback
+        await svc_memory_feedback(
+            procedure_name=procedure.name,
+            memory_ids_used=memory_ids,
+            success=True,
+            namespace=namespace,
+        )
+        return "Task succeeded and procedure reinforced."
+
+    except Exception as exc:
+        # 3b. Report Failure and Trigger Self-Healing
+        feedback_res = await svc_memory_feedback(
+            procedure_name=procedure.name,
+            memory_ids_used=memory_ids,
+            success=False,
+            failure_reason=str(exc),
+            namespace=namespace,
+        )
+        
+        # 4. Optional: Retry immediately with newly patched steps
+        if feedback_res.get("procedure_updated") and feedback_res.get("patched_steps"):
+            repaired_steps = feedback_res["patched_steps"]
+            print(f"Runbook auto-healed! Repaired steps: {repaired_steps}")
+            # retry_with_steps(repaired_steps)
+            
+        return f"Task failed, but procedure was auto-patched: {feedback_res}"
+```
+
 ---
 
 ## 7. Testing, Evaluation & Debugging Toolkit
