@@ -99,11 +99,22 @@ async def update_utility_scores(
     pool = await get_db_pool() if conn is None else None
 
     async def _execute(c: asyncpg.Connection) -> int:
-        update_sql = """
-            UPDATE memories
-            SET utility_score = utility_score + $1
-            WHERE memory_id = ANY($2::uuid[]);
-        """
+        if delta > 0:
+            update_sql = """
+                UPDATE memories
+                SET utility_score = utility_score + $1,
+                    access_count = access_count + 1,
+                    reaffirmed_at = NOW(),
+                    confidence = LEAST(1.0, confidence + 0.05)
+                WHERE memory_id = ANY($2::uuid[]);
+            """
+        else:
+            update_sql = """
+                UPDATE memories
+                SET utility_score = utility_score + $1,
+                    confidence = GREATEST(0.1, confidence - 0.20)
+                WHERE memory_id = ANY($2::uuid[]);
+            """
         res = await c.execute(update_sql, delta, valid_uuids)
         # res format is "UPDATE <count>"
         try:

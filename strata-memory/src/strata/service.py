@@ -5,10 +5,11 @@ from uuid import UUID
 
 from strata.config import settings
 from strata.db import get_db_pool
+from strata.embedder import LocalEmbedder
 from strata.llm_processor.prompts import EDIT_INSTRUCTION_PROMPT
 from strata.llm_processor.router import (
+    call_llm_json,
     distill_episodes_with_llm,
-    get_llm_client,
     patch_procedure_with_llm,
     process_and_ingest,
 )
@@ -173,26 +174,53 @@ async def svc_memory_edit(
     pillar: Literal["semantic", "procedural", "entity"] = "semantic",
     namespace: str = "default",
 ) -> Dict[str, Any]:
-    """Uses the Memory-Side Small LLM to modify or supersede an existing memory."""
+    """Uses the Memory-Side Small LLM to modify or supersede an existing memory.
+    If target_id_or_name is a UUID, targets that exact memory.
+    If target_id_or_name is a search phrase or omitted ('', 'auto'), intelligently auto-locates
+    the top matching active memory via vector similarity."""
     pool = await get_db_pool()
+    target_clean = (target_id_or_name or "").strip()
 
     if pillar == "semantic":
-        # Fetch existing memory
-        try:
-            target_uuid = UUID(target_id_or_name)
-        except ValueError:
-            return {"status": "error", "message": f"Invalid UUID: {target_id_or_name}"}
+        target_uuid = None
+        if target_clean and target_clean.lower() != "auto":
+            try:
+                target_uuid = UUID(target_clean)
+            except ValueError:
+                target_uuid = None
 
         async with pool.acquire() as c:
-            existing = await c.fetchrow(
-                "SELECT summary, tags, payload FROM memories WHERE memory_id = $1 AND namespace = $2 AND valid_until IS NULL",
-                target_uuid,
-                namespace,
-            )
+            existing = None
+            if target_uuid:
+                existing = await c.fetchrow(
+                    "SELECT memory_id, summary, tags, payload FROM memories WHERE memory_id = $1 AND namespace = $2 AND (valid_until IS NULL OR valid_until > NOW())",
+                    target_uuid,
+                    namespace,
+                )
+            else:
+                # Intelligent Auto-Location via vector similarity
+                search_query = target_clean if target_clean and target_clean.lower() != "auto" else instruction
+                embedder = LocalEmbedder.get_instance()
+                embedding = await embedder.embed_one(search_query)
+                vec_str = embedder.to_pgvector_str(embedding)
+                existing = await c.fetchrow(
+                    """
+                    SELECT memory_id, summary, tags, payload, (1.0 - (embedding <=> $2::vector(768))) AS similarity
+                    FROM memories
+                    WHERE namespace = $1
+                      AND type = 'semantic'
+                      AND (valid_until IS NULL OR valid_until > NOW())
+                    ORDER BY (embedding <=> $2::vector(768)) ASC
+                    LIMIT 1;
+                    """,
+                    namespace,
+                    vec_str,
+                )
 
         if not existing:
-            return {"status": "not_found", "message": f"No active semantic memory found with id {target_id_or_name}"}
+            return {"status": "not_found", "message": f"No active semantic memory found matching '{target_id_or_name or instruction}' in namespace '{namespace}'"}
 
+        target_id_or_name = str(existing["memory_id"])
         current_summary = existing["summary"]
         current_tags = existing["tags"] or []
 
@@ -201,20 +229,11 @@ async def svc_memory_edit(
         new_tags = current_tags
         if settings.memory_llm_enabled:
             try:
-                client = get_llm_client()
-                resp = await client.chat.completions.create(
-                    model=settings.memory_llm_model,
-                    messages=[
-                        {"role": "system", "content": EDIT_INSTRUCTION_PROMPT},
-                        {
-                            "role": "user",
-                            "content": f"Existing Fact: {current_summary}\nExisting Tags: {current_tags}\nModification Instruction: {instruction}",
-                        },
-                    ],
-                    response_format={"type": "json_object"},
+                parsed = await call_llm_json(
+                    EDIT_INSTRUCTION_PROMPT,
+                    f"Existing Fact: {current_summary}\nExisting Tags: {current_tags}\nModification Instruction: {instruction}",
                     temperature=0.1,
                 )
-                parsed = json.loads(resp.choices[0].message.content or "{}")
                 if parsed.get("updated_summary"):
                     new_summary = parsed["updated_summary"]
                 if parsed.get("updated_tags"):
@@ -236,6 +255,7 @@ async def svc_memory_edit(
             "new_memory_id": new_id,
             "superseded_memory_id": superseded_id,
             "summary": new_summary,
+            "target_id": target_id_or_name,
         }
 
     elif pillar == "procedural":
@@ -245,8 +265,26 @@ async def svc_memory_edit(
                 target_id_or_name,
                 namespace,
             )
+            if not existing and instruction:
+                # Intelligent Auto-Location for procedure via trigger_embedding
+                search_query = target_clean if target_clean and target_clean.lower() != "auto" else instruction
+                embedder = LocalEmbedder.get_instance()
+                embedding = await embedder.embed_one(search_query)
+                vec_str = embedder.to_pgvector_str(embedding)
+                existing = await c.fetchrow(
+                    """
+                    SELECT name, description, trigger_condition, steps, prerequisites
+                    FROM procedural_memories
+                    WHERE namespace = $1 AND is_active = TRUE
+                    ORDER BY (trigger_embedding <=> $2::vector(768)) ASC
+                    LIMIT 1;
+                    """,
+                    namespace,
+                    vec_str,
+                )
+
         if not existing:
-            return {"status": "not_found", "message": f"No active procedure found matching {target_id_or_name}"}
+            return {"status": "not_found", "message": f"No active procedure found matching {target_id_or_name or instruction}"}
 
         name = existing["name"]
         steps = existing["steps"] if isinstance(existing["steps"], list) else []
@@ -254,20 +292,11 @@ async def svc_memory_edit(
 
         if settings.memory_llm_enabled:
             try:
-                client = get_llm_client()
-                resp = await client.chat.completions.create(
-                    model=settings.memory_llm_model,
-                    messages=[
-                        {"role": "system", "content": EDIT_INSTRUCTION_PROMPT},
-                        {
-                            "role": "user",
-                            "content": f"Procedure: {name}\nCurrent Steps: {json.dumps(steps)}\nInstruction: {instruction}",
-                        },
-                    ],
-                    response_format={"type": "json_object"},
+                parsed = await call_llm_json(
+                    EDIT_INSTRUCTION_PROMPT,
+                    f"Procedure: {name}\nCurrent Steps: {json.dumps(steps)}\nInstruction: {instruction}",
                     temperature=0.1,
                 )
-                parsed = json.loads(resp.choices[0].message.content or "{}")
                 if parsed.get("updated_steps"):
                     new_steps = parsed["updated_steps"]
             except Exception as e:
@@ -293,7 +322,7 @@ async def svc_memory_edit(
     elif pillar == "entity":
         # Handle entity modification
         try:
-            target_uuid = UUID(target_id_or_name)
+            target_uuid = UUID(target_clean)
             is_uuid = True
         except ValueError:
             is_uuid = False
@@ -308,12 +337,39 @@ async def svc_memory_edit(
                 )
         else:
             async with pool.acquire() as c:
-                await c.execute(
-                    "UPDATE entity_nodes SET summary = summary || ' [Edited: ' || $1 || ']' WHERE name = $2 AND namespace = $3",
-                    instruction,
+                existing = await c.fetchrow(
+                    "SELECT entity_id, name, summary FROM entity_nodes WHERE name = $1 AND namespace = $2 AND is_active = TRUE",
                     target_id_or_name,
                     namespace,
                 )
+                if not existing and instruction:
+                    # Auto-locate entity node via vector similarity
+                    search_query = target_clean if target_clean and target_clean.lower() != "auto" else instruction
+                    embedder = LocalEmbedder.get_instance()
+                    embedding = await embedder.embed_one(search_query)
+                    vec_str = embedder.to_pgvector_str(embedding)
+                    existing = await c.fetchrow(
+                        """
+                        SELECT entity_id, name, summary
+                        FROM entity_nodes
+                        WHERE namespace = $1 AND is_active = TRUE
+                        ORDER BY (embedding <=> $2::vector(768)) ASC
+                        LIMIT 1;
+                        """,
+                        namespace,
+                        vec_str,
+                    )
+                if existing:
+                    await c.execute(
+                        "UPDATE entity_nodes SET summary = summary || ' [Edited: ' || $1 || ']' WHERE entity_id = $2 AND namespace = $3",
+                        instruction,
+                        existing["entity_id"],
+                        namespace,
+                    )
+                    target_id_or_name = existing["name"]
+                else:
+                    return {"status": "not_found", "message": f"No entity found matching '{target_id_or_name or instruction}'"}
+
         return {"status": "edited", "pillar": "entity", "target": target_id_or_name}
 
     return {"status": "error", "message": f"Unsupported pillar: {pillar}"}
@@ -325,10 +381,33 @@ async def svc_memory_feedback(
     success: bool = True,
     failure_reason: Optional[str] = None,
     namespace: str = "default",
+    memory_query: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Updates utility scores on used memories, and auto-patches procedures on failure."""
-    memory_ids_used = memory_ids_used or []
+    """Updates utility scores on used memories, and auto-patches procedures on failure.
+    Supports either explicit memory_ids_used, or intelligent auto-location via memory_query."""
+    memory_ids_used = list(memory_ids_used) if memory_ids_used else []
     delta = 1 if success else -2
+
+    # Intelligent Auto-Location for feedback if memory_query is provided and no IDs given
+    if not memory_ids_used and memory_query:
+        pool = await get_db_pool()
+        embedder = LocalEmbedder.get_instance()
+        embedding = await embedder.embed_one(memory_query)
+        vec_str = embedder.to_pgvector_str(embedding)
+        async with pool.acquire() as c:
+            row = await c.fetchrow(
+                """
+                SELECT memory_id, summary
+                FROM memories
+                WHERE namespace = $1 AND (valid_until IS NULL OR valid_until > NOW())
+                ORDER BY (embedding <=> $2::vector(768)) ASC
+                LIMIT 1;
+                """,
+                namespace,
+                vec_str,
+            )
+            if row:
+                memory_ids_used.append(str(row["memory_id"]))
 
     # 1. Update utility scores
     updated_score_count = 0
@@ -369,6 +448,7 @@ async def svc_memory_feedback(
         "status": "feedback_recorded",
         "success": success,
         "memories_updated_count": updated_score_count,
+        "memory_ids_updated": memory_ids_used,
         "procedure_updated": proc_updated,
         "patched_steps": patched_steps,
     }

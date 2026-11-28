@@ -103,8 +103,7 @@ class LayaDecisionEngine:
     ]
 
     EPISODIC_PATTERNS = [
-        r"\b(succeeded|failed|failure|success|error|exception|crash|incident)\b",
-        r"\b(deployed|built|tested|executed|ran|restarted|migrated|created)\b",
+        r"\b(succeeded|failed|failure|success|error|exception|crash)\b",
         r"\b(at \d{1,2}(?::\d{2})?\s*(?:am|pm)?|yesterday|today|last night)\b",
         r"\b(tried to|attempted to|result was|outcome:?)\b",
     ]
@@ -198,17 +197,26 @@ class LayaDecisionEngine:
         sentences = [s for s in re.split(r"(?<=[.!?])\s+|\n+", text) if s.strip()]
         sentence_count = len(sentences)
 
-        # 3. Contradiction / Auto-Supersede Detection
+        # Multi-clause and compound statement detection (commas, semicolons, compound conjunctions)
+        clauses = [c for c in re.split(r"(?<=[.!?,;])\s+|\n+", text) if len(c.strip()) > 3]
+        clause_count = len(clauses)
+        has_compound_conjunction = bool(re.search(r"\b(and (?:i|we|they|he|she|it|the|this)\b|as well as|while also|meanwhile|furthermore)", text_lower, re.IGNORECASE))
+        is_identity_or_relational = bool(re.search(r"\b(my name is|i am a\b|i am an\b|i work as|my role is|working at|works at|leading the|member of)\b", text_lower))
+
+        # 3. Prior Context Overlap Detection (Domain-Agnostic)
+        # If there are active memories in the same semantic space, an incoming statement may be a state evolution,
+        # refinement, or contradiction. Delegate to the Cognitive LLM instead of relying on hardcoded keyword lists.
         supersede_id = None
         is_supersede = False
         existing_semantics = context_data.get("existing_semantic_memories", [])
-        update_indicators = ["update:", "change:", "correction:", "no longer", "instead of", "replaced"]
-        has_update_signal = any(ind in text_lower for ind in update_indicators)
-
-        if existing_semantics and has_update_signal:
-            top_sem = existing_semantics[0]
-            supersede_id = top_sem.get("id")
-            is_supersede = True
+        has_semantic_overlap = (
+            any(
+                (float(sem["similarity"]) >= 0.40 if "similarity" in sem else True)
+                for sem in existing_semantics
+            )
+            if existing_semantics
+            else False
+        )
 
         # 4. Multi-Pillar Complexity Assessment
         pillars_active = (
@@ -222,7 +230,9 @@ class LayaDecisionEngine:
             is_complex = True
         elif complexity_hits >= settings.laya_complexity_threshold:
             is_complex = True
-        elif sentence_count >= 2 and not has_update_signal:
+        elif sentence_count >= 2 or clause_count >= 2 or has_compound_conjunction or is_identity_or_relational:
+            is_complex = True
+        elif has_semantic_overlap:
             is_complex = True
 
         # 5. Primary Pillar Determination
@@ -230,7 +240,7 @@ class LayaDecisionEngine:
             "episodic": episodic_hits * 1.5,
             "procedural": procedural_hits * 2.0,
             "entity": entity_hits * 2.0,
-            "semantic": 1.0,
+            "semantic": 4.0 if has_semantic_overlap else 1.0,
         }
         primary_pillar = max(scores, key=scores.get)
 

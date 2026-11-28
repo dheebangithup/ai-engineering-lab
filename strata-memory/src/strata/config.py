@@ -61,6 +61,15 @@ class StrataSettings(BaseSettings):
     strata_api_host: str = "0.0.0.0"
     strata_api_port: int = 8080
 
+    # MCP Server Transport & Deployment Controls
+    auto_migrate: bool = False
+    mcp_transport: str = "stdio"        # "stdio" | "streamable-http" | "http" | "sse"
+    mcp_host: str = "0.0.0.0"
+    mcp_port: int = 8000
+    mcp_path: str = "/mcp"
+    mcp_stateless_http: bool = True
+    mcp_auth_token: Optional[str] = None
+
     # Memory Lifecycle & Retention Policies (Agent Memory Architect)
     decay_half_life_days: float = 30.0            # 30-day half-life decay on un-reaffirmed facts
     working_memory_max_tokens: int = 2000         # Short-term working context budget cap

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ============================================================================
@@ -43,8 +43,15 @@ class EntityExtractionOp(BaseModel):
     target_name: str
     target_type: str = "concept"
     target_summary: str = ""
-    fact_summary: str
+    fact_summary: str = ""
     invalidate_conflicting_relations: bool = True
+
+    @model_validator(mode="after")
+    def populate_fact_summary(self) -> "EntityExtractionOp":
+        if not self.fact_summary:
+            clean_rel = self.relation_type.lower().replace("_", " ")
+            self.fact_summary = f"{self.source_name} {clean_rel} {self.target_name}"
+        return self
 
 
 class MemoryExtractionPlan(BaseModel):
@@ -198,7 +205,7 @@ class StoreExplicitRequest(BaseModel):
 
 
 class EditRequest(BaseModel):
-    target_id_or_name: str
+    target_id_or_name: str = ""
     instruction: str
     pillar: Literal["semantic", "procedural", "entity"] = "semantic"
     namespace: str = "default"
@@ -206,6 +213,7 @@ class EditRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     memory_ids_used: List[str] = Field(default_factory=list)
+    memory_query: Optional[str] = None
     procedure_name: Optional[str] = None
     success: bool = True
     failure_reason: Optional[str] = None

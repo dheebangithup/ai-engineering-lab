@@ -69,11 +69,15 @@ def test_laya_complex_multi_pillar_routing():
 
 
 def test_laya_auto_supersede_detection():
-    """Verify Laya identifies updates that supersede existing memories."""
-    text = "Update: We changed default database from SQLite to Neon Postgres."
+    """Verify Laya delegates overlapping prior context (even non-tech, without update keywords) to the Cognitive LLM."""
+    text = "I moved to Tokyo last month."
     context_data = {
         "existing_semantic_memories": [
-            {"id": "11111111-2222-3333-4444-555555555555", "summary": "Default database is SQLite."}
+            {
+                "id": "11111111-2222-3333-4444-555555555555",
+                "summary": "User lives in London.",
+                "similarity": 0.52,
+            }
         ]
     }
     decision = laya_engine.evaluate(
@@ -81,10 +85,9 @@ def test_laya_auto_supersede_detection():
         raw_embedding=[0.0] * 768,
         context_data=context_data,
     )
-    assert decision.is_supersede is True
-    assert decision.supersede_target_id == "11111111-2222-3333-4444-555555555555"
-    assert decision.extraction_plan.semantic_ops[0].action == "SUPERSEDE"
-    assert decision.extraction_plan.semantic_ops[0].supersede_memory_id == "11111111-2222-3333-4444-555555555555"
+    assert decision.complexity == "complex"
+    assert decision.primary_pillar == "semantic"
+    assert decision.extraction_plan is None  # Delegates state evolution decision to Cognitive LLM
 
 
 def test_dynamic_recall_and_ingest_models():
@@ -270,3 +273,4 @@ async def test_signal_gate_and_fact_reaffirmation_e2e():
     finally:
         await svc_memory_purge_namespace(namespace=test_ns, confirm=True)
         await close_db_pool()
+

@@ -1,19 +1,111 @@
-version: '3.8'
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: strata-postgres
     environment:
-      POSTGRES_DB: strata
-      POSTGRES_USER: strata_user
-      POSTGRES_PASSWORD: strata_password
+      POSTGRES_DB: ${POSTGRES_DB:-strata}
+      POSTGRES_USER: ${POSTGRES_USER:-strata_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-strata_password}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - strata_pgdata:/var/lib/postgresql/data
-      - ./sql/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql
+      - ./sql/001_init_schema.sql:/docker-entrypoint-initdb.d/001_init_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-strata_user} -d ${POSTGRES_DB:-strata}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: strata-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - strata_ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # Uncomment below if deploying on a Linux host with NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: strata-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-nomic-embed-text}
+      MEMORY_LLM_ENABLED: ${MEMORY_LLM_ENABLED:-true}
+      MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-qwen2.5:3b-instruct}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "Pulling embedding model: $${EMBEDDING_MODEL_NAME}"
+        ollama pull "$${EMBEDDING_MODEL_NAME}"
+        if [ "$${MEMORY_LLM_ENABLED}" = "true" ]; then
+          echo "Pulling cognitive LLM model: $${MEMORY_LLM_MODEL}"
+          ollama pull "$${MEMORY_LLM_MODEL}"
+        fi
+        echo "Ollama models ready."
+    restart: "no"
+
+  strata-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: strata-mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://strata_user:strata_password@postgres:5432/strata}
+      DIRECT_DATABASE_URL: ${DIRECT_DATABASE_URL:-postgresql://strata_user:strata_password@postgres:5432/strata}
+      DB_STATEMENT_CACHE_SIZE: ${DB_STATEMENT_CACHE_SIZE:-0}
+      NEON_KEEP_ALIVE: ${NEON_KEEP_ALIVE:-true}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://ollama:11434/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-ollama}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-nomic-embed-text}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      MEMORY_LLM_ENABLED: ${MEMORY_LLM_ENABLED:-true}
+      MEMORY_LLM_BASE_URL: ${MEMORY_LLM_BASE_URL:-http://ollama:11434/v1}
+      MEMORY_LLM_API_KEY: ${MEMORY_LLM_API_KEY:-ollama}
+      MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-qwen2.5:3b-instruct}
+      MEMORY_LLM_TIMEOUT_SECONDS: ${MEMORY_LLM_TIMEOUT_SECONDS:-120.0}
+      AUTO_MIGRATE: "true"
+      MCP_TRANSPORT: "streamable-http"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      MCP_STATELESS_HTTP: ${MCP_STATELESS_HTTP:-true}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     restart: unless-stopped
 
 volumes:
   strata_pgdata:
+  strata_ollama_data:

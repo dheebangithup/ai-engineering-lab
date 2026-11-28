@@ -203,6 +203,31 @@ Claude Desktop and Cursor launch MCP server sub-processes without inheriting you
 }
 ```
 
+### 2.5 Restricting Admin Tools in `mcp.json` (Optional)
+If your MCP client supports tool-level filtering (such as Cursor, Cline, or Windsurf), you can disable admin/maintenance tools so runtime agents only see the core agent tools:
+
+```json
+{
+  "mcpServers": {
+    "strata-memory": {
+      "command": "/Users/dheeban/Documents/my_projects/ai-engineering-lab/strata-memory/.venv/bin/strata-mcp",
+      "args": ["--transport", "stdio"],
+      "disabledTools": [
+        "memory_prune",
+        "memory_purge_namespace"
+      ],
+      "autoApprove": [
+        "memory_recall",
+        "memory_ingest",
+        "memory_edit",
+        "memory_feedback"
+      ]
+    }
+  }
+}
+```
+*(For programmatic clients like LangChain `MultiServerMCPClient`, filter the returned tool list to `{"memory_recall", "memory_ingest", "memory_edit", "memory_feedback"}` before binding to your agent.)*
+
 ---
 
 ## 3. REST HTTP API via `curl` or HTTP Clients
@@ -428,9 +453,26 @@ When an agent connects to Strata via MCP, it executes the `tools/list` handshake
 
 ---
 
-## 6. Agent System Prompt Engineering Guide
+## 6. Agent Tool Exposure & System Prompt Guide
 
-While the MCP JSON Schema tells the LLM **syntactically how** to construct tool calls, the agent needs guidance in its **System Prompt** so it knows **when and why** to invoke memory.
+While the MCP JSON Schema tells the LLM **syntactically how** to construct tool calls, you should also restrict which tools are exposed to runtime agents and define **each tool's sole purpose and exact trigger event** in the **System Prompt**.
+
+### 6.1 Recommended Tool Exposure Matrix
+
+Expose only the **Agent Runtime Tools** to conversational/task agents; keep **Admin / Maintenance Tools** restricted to operator or scheduled-maintenance workflows.
+
+| Exposure | Tool | Sole Purpose | Event / When to Use |
+|---|---|---|---|
+| **Expose to Agents** | `memory_recall` | Retrieve active context across the 4 pillars within a token budget. | Before answering user/project questions or starting a task that depends on prior context. |
+| **Expose to Agents** | `memory_ingest` | Autonomously extract, route across pillars, and supersede conflicting facts from raw text. | Whenever the user shares new facts, role/config changes, preferences, events, or entity relations. |
+| **Expose to Agents** | `memory_edit` | Modify a known `semantic` (by UUID) or `procedural` (by name/ID) record. | When making a targeted edit to a specific known record. *(Prefer `memory_ingest` for entity restructuring; `episodic` is immutable.)* |
+| **Expose to Agents** | `memory_feedback` | Adjust `utility_score` (`+1` / `-2`) and auto-patch failed procedures. | Immediately after a task or runbook succeeds or fails using recalled memories. |
+| **Expose (Optional)** | `memory_delete` | Soft-invalidate or permanently remove a single record by ID. | Only when explicitly asked to forget or delete a specific erroneous record. |
+| **Expose (Optional)** | `memory_store_explicit` | Zero-LLM direct write when pillar and schema are already known. | Programmatic/structured pipelines (not typical natural-language turns). |
+| **Admin Only** | `memory_prune` | Retire toxic memories, distill expiring episodes into reusable facts/runbooks, and purge old rows. | Manual admin cleanup or scheduled maintenance jobs. |
+| **Admin Only** | `memory_purge_namespace` | Delete all records in a namespace. | Test teardown or explicit tenant deletion only. |
+
+### 6.2 Agent System Prompt Snippet
 
 Add this concise snippet to your agent's system prompt (e.g. your personal Jarvis agent):
 
@@ -439,17 +481,22 @@ Add this concise snippet to your agent's system prompt (e.g. your personal Jarvi
 You are equipped with Strata, a 4-pillar long-term memory engine backed by Neon PostgreSQL.
 
 1. RECALL (Before Answering):
-   - Before answering technical questions, architectural designs, code modifications, or past events, invoke `memory_recall(query="...")`.
-   - The tool returns a `<strata_memory_context>` XML block containing active facts, procedural skills, and entity graphs bounded to your token budget. Use these memories to ground your response.
+   - Event: Before answering technical questions, architectural designs, code modifications, or past events.
+   - Action: Invoke `memory_recall(query="...")` to retrieve `<strata_memory_context>` and ground your response.
 
-2. INGEST (When Learning New Information):
-   - When the user shares a new architectural decision, preference, credential, or project fact, invoke `memory_ingest(raw_text="...")`.
-   - Do NOT try to structure JSON yourself; Strata's internal Laya Decision Engine and Small LLM router automatically extract facts, detect contradictions, supersede stale records, and map entity relations.
+2. INGEST (When Learning or Updating Information):
+   - Event: When the user shares a new decision, preference, role/state change, event, or entity relationship.
+   - Action: Invoke `memory_ingest(raw_text="...")` with natural language. Strata's Laya Decision Engine and Small LLM automatically extract facts, route across pillars, and supersede stale records.
 
-3. FEEDBACK & SELF-HEALING (After Executing Tasks):
-   - After executing a procedural runbook or multi-step skill:
-     - If the task succeeded: Call `memory_feedback(procedure_name="...", success=true)`.
-     - If the task failed: Call `memory_feedback(procedure_name="...", success=false, failure_reason="<exact error trace>")`. Strata will automatically analyze the failure and patch the runbook steps for future executions.
+3. EDIT (Targeted Revision of a Known Record):
+   - Event: When you already have the target UUID or procedure name and need to apply a specific correction.
+   - Action: Invoke `memory_edit(target_id_or_name="...", instruction="...", pillar="semantic|procedural")`. (Use `memory_ingest` to restructure entity relationships; `episodic` logs are immutable.)
+
+4. FEEDBACK & SELF-HEALING (After Executing Tasks):
+   - Event: Immediately after completing or failing a task/runbook that used recalled memories.
+   - Action:
+     - Success: Call `memory_feedback(memory_ids_used=[...], procedure_name="...", success=true)`.
+     - Failure: Call `memory_feedback(memory_ids_used=[...], procedure_name="...", success=false, failure_reason="<exact error trace>")` so Strata can penalize bad memories and auto-patch the procedure steps.
 ```
 
 ---

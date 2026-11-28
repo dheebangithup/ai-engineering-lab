@@ -1,0 +1,36 @@
+# Use this override when connecting Dockerized strata-mcp to external Neon Postgres
+# and/or Host Ollama (recommended on macOS Apple Silicon for Metal GPU acceleration):
+#   docker compose -f docker-compose.external.yml up -d --build
+#
+# Ensure your .env file sets DATABASE_URL (Neon) and/or EMBEDDING_BASE_URL / MEMORY_LLM_BASE_URL
+# (defaults below point to host.docker.internal:11434 for host Ollama).
+
+services:
+  strata-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: strata-mcp
+    env_file:
+      - .env
+    environment:
+      EMBEDDING_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      MEMORY_LLM_BASE_URL: ${DOCKER_OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      AUTO_MIGRATE: "true"
+      MCP_TRANSPORT: "streamable-http"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      MCP_STATELESS_HTTP: ${MCP_STATELESS_HTTP:-true}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped

@@ -149,6 +149,7 @@ async def api_memory_feedback(req: FeedbackRequest) -> Dict[str, Any]:
             success=req.success,
             failure_reason=req.failure_reason,
             namespace=req.namespace,
+            memory_query=req.memory_query,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
@@ -265,10 +266,28 @@ async def api_working_memory_clear(namespace: str, session_id: str) -> Dict[str,
 
 def main() -> None:
     """CLI launcher for Strata FastAPI server."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Strata Memory Engine REST API")
+    parser.add_argument(
+        "-p", "--port",
+        type=int,
+        default=settings.strata_api_port,
+        help=f"Port to bind to (default: {settings.strata_api_port})",
+    )
+    parser.add_argument(
+        "-H", "--host",
+        type=str,
+        default=settings.strata_api_host,
+        help=f"Host to bind to (default: {settings.strata_api_host})",
+    )
+    args = parser.parse_args()
+
     uvicorn.run(
         "strata.rest_api:app",
-        host=settings.strata_api_host,
-        port=settings.strata_api_port,
+        host=args.host,
+        port=args.port,
+        loop="asyncio",
         reload=False,
     )
 

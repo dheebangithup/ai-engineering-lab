@@ -28,13 +28,51 @@ from strata.pillars.semantic import add_or_supersede_semantic
 logger = logging.getLogger("strata.llm_router")
 
 
+_llm_client: Optional[AsyncOpenAI] = None
+_llm_client_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
 def get_llm_client() -> AsyncOpenAI:
-    return AsyncOpenAI(
-        base_url=settings.memory_llm_base_url,
-        api_key=settings.memory_llm_api_key,
-        timeout=settings.memory_llm_timeout_seconds,
-        max_retries=0,
-    )
+    """Returns a loop-aware AsyncOpenAI client singleton for LLM extraction and repair."""
+    global _llm_client, _llm_client_loop
+    try:
+        curr_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        curr_loop = None
+
+    if _llm_client is None or _llm_client_loop != curr_loop or (curr_loop and curr_loop.is_closed()):
+        _llm_client = AsyncOpenAI(
+            base_url=settings.memory_llm_base_url,
+            api_key=settings.memory_llm_api_key,
+            timeout=settings.memory_llm_timeout_seconds,
+            max_retries=0,
+        )
+        _llm_client_loop = curr_loop
+    return _llm_client
+
+
+async def call_llm_json(
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float = 0.1,
+) -> dict:
+    """Invokes the configured LLM expecting a JSON object, suppressing slow reasoning blocks on reasoning models."""
+    client = get_llm_client()
+    kwargs: Dict[str, Any] = {
+        "model": settings.memory_llm_model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": temperature,
+    }
+    if "qwen3" in settings.memory_llm_model.lower():
+        kwargs["reasoning_effort"] = "none"
+
+    response = await client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content or "{}"
+    return clean_and_parse_json(content)
 
 
 async def prefetch_relevant_context(
@@ -57,7 +95,7 @@ async def prefetch_relevant_context(
         # 1. Top active semantic memories
         sem_rows = await c.fetch(
             """
-            SELECT memory_id, summary, tags
+            SELECT memory_id, summary, tags, (1.0 - (embedding <=> $2::vector(768))) AS similarity
             FROM memories
             WHERE namespace = $1
               AND type = 'semantic'
@@ -100,22 +138,12 @@ async def prefetch_relevant_context(
 
     return {
         "existing_semantic_memories": [
-            {"id": str(r["memory_id"]), "summary": r["summary"], "tags": r["tags"]}
-            for r in sem_rows
-        ],
-        "existing_procedures": [
-            {"name": r["name"], "trigger": r["trigger_condition"], "steps": r["steps"]}
-            for r in proc_rows
-        ],
-        "existing_entities": [
-            {"name": r["name"], "type": r["entity_type"], "summary": r["summary"]}
-            for r in ent_rows
-        ],
-    }
-
-    return {
-        "existing_semantic_memories": [
-            {"id": str(r["memory_id"]), "summary": r["summary"], "tags": r["tags"]}
+            {
+                "id": str(r["memory_id"]),
+                "summary": r["summary"],
+                "tags": r["tags"],
+                "similarity": float(r["similarity"]) if r["similarity"] is not None else 0.0,
+            }
             for r in sem_rows
         ],
         "existing_procedures": [
@@ -373,25 +401,13 @@ async def process_and_ingest(
 
     # Step 4: Complex multi-pillar path handled via Small Decision LLM
     try:
-        client = get_llm_client()
         user_prompt = f"""EXISTING_SIMILAR_MEMORIES:
 {json.dumps(context_data, indent=2)}
 
 NEW_RAW_INPUT:
 {raw_text}
 """
-        response = await client.chat.completions.create(
-            model=settings.memory_llm_model,
-            messages=[
-                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-
-        content = response.choices[0].message.content or "{}"
-        parsed = clean_and_parse_json(content)
+        parsed = await call_llm_json(EXTRACTION_SYSTEM_PROMPT, user_prompt, temperature=0.1)
         plan = MemoryExtractionPlan.model_validate(parsed)
 
         # If LLM returned empty plan, fall back to adding raw text as semantic
@@ -446,22 +462,11 @@ async def patch_procedure_with_llm(
         return None
 
     try:
-        client = get_llm_client()
         user_prompt = f"""Procedure Name: {name}
 Current Steps: {json.dumps(current_steps)}
 Failure Reason / Error: {failure_reason}
 """
-        response = await client.chat.completions.create(
-            model=settings.memory_llm_model,
-            messages=[
-                {"role": "system", "content": PROCEDURE_PATCH_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-        content = response.choices[0].message.content or "{}"
-        parsed = clean_and_parse_json(content)
+        parsed = await call_llm_json(PROCEDURE_PATCH_PROMPT, user_prompt, temperature=0.1)
         patch = ProcedurePatchPlan.model_validate(parsed)
         return patch.patched_steps
     except Exception as exc:
@@ -478,24 +483,13 @@ async def distill_episodes_with_llm(
         return MemoryDistillationPlan(has_durable_knowledge=False)
 
     try:
-        client = get_llm_client()
         episodes_context = json.dumps(episodes, indent=2)
         user_prompt = f"""EXPIRING_EPISODES:
 {episodes_context}
 
 Analyze these episodes. Extract any reusable runbooks (procedures) or durable facts (semantic), or flag as disposable noise.
 """
-        response = await client.chat.completions.create(
-            model=settings.memory_llm_model,
-            messages=[
-                {"role": "system", "content": DISTILLATION_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-        content = response.choices[0].message.content or "{}"
-        parsed = clean_and_parse_json(content)
+        parsed = await call_llm_json(DISTILLATION_PROMPT, user_prompt, temperature=0.1)
         return MemoryDistillationPlan.model_validate(parsed)
     except Exception as exc:
         logger.warning(f"Cognitive episodic distillation via LLM failed ({exc}).")

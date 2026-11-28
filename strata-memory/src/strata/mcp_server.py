@@ -1,11 +1,18 @@
 import argparse
+import hmac
 import json
 import logging
 import sys
 from typing import Annotated, Any, Dict, List, Literal, Optional
+import httpx
 from pydantic import Field
 from fastmcp import FastMCP
+from fastmcp.server.lifespan import lifespan
+from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 from strata.config import settings
+from strata.db import close_db_pool, ensure_db_ready_and_migrate, get_db_pool
 from strata.neon_control import maybe_suspend_neon_compute
 from strata.service import (
     svc_memory_delete,
@@ -27,9 +34,48 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+logger = logging.getLogger("strata.mcp_server")
+
+
+class BearerAuthMiddleware:
+    """Pure ASGI Bearer token guard for HTTP-exposed MCP routes (zero stream buffering)."""
+
+    EXEMPT_PATHS = {"/health", "/ready"}
+
+    def __init__(self, app: Any, token: str) -> None:
+        self.app = app
+        self.token = token
+
+    async def __call__(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or scope.get("path") in self.EXEMPT_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        headers = dict(scope.get("headers") or [])
+        auth_val = headers.get(b"authorization", b"").decode("latin-1")
+        expected = f"Bearer {self.token}"
+        if not auth_val or not hmac.compare_digest(auth_val, expected):
+            resp = JSONResponse({"error": "Unauthorized: invalid or missing Bearer token"}, status_code=401)
+            await resp(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+
+@lifespan
+async def strata_mcp_lifespan(server: FastMCP):
+    """Initializes database readiness/migrations on startup and cleans up pool on shutdown."""
+    if settings.auto_migrate:
+        await ensure_db_ready_and_migrate(auto_migrate=True)
+    yield {}
+    await close_db_pool()
+    await maybe_suspend_neon_compute()
+
 
 mcp = FastMCP(
     name="Strata Memory Engine",
+    version="0.1.0",
+    lifespan=strata_mcp_lifespan,
     instructions="""
 Strata is a 4-pillar cognitive memory engine backed by Neon Serverless PostgreSQL.
 It provides long-term persistence across 4 distinct cognitive layers:
@@ -44,6 +90,55 @@ RECOMMENDED AGENT WORKFLOW:
 - CALL `memory_feedback` AFTER executing runbooks to reinforce successful memories or trigger auto-repair on failure.
 """,
 )
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def mcp_health_check(request: Request) -> JSONResponse:
+    """Lightweight liveness probe for container orchestrators."""
+    return JSONResponse({"status": "ok", "engine": "strata-memory", "version": "0.1.0"})
+
+
+@mcp.custom_route("/ready", methods=["GET"])
+async def mcp_readiness_check(request: Request) -> JSONResponse:
+    """Readiness probe verifying PostgreSQL connectivity and Ollama embedding model availability."""
+    checks: Dict[str, Any] = {"postgres": "unknown", "embedding_service": "unknown"}
+    ready = True
+
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1;")
+        checks["postgres"] = "ok"
+    except Exception as exc:
+        checks["postgres"] = f"error: {exc}"
+        ready = False
+
+    embed_root = settings.embedding_base_url.rstrip("/")
+    if embed_root.endswith("/v1"):
+        embed_root = embed_root[:-3]
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            if settings.embedding_provider == "ollama":
+                r = await client.get(f"{embed_root}/api/tags")
+                r.raise_for_status()
+                models = [m.get("name", "") for m in r.json().get("models", [])]
+                embed_base = settings.embedding_model_name.split(":")[0]
+                has_embed = any(m == settings.embedding_model_name or m.startswith(f"{embed_base}:") for m in models)
+                checks["embedding_service"] = "ok" if has_embed else f"missing_model:{settings.embedding_model_name}"
+                checks["loaded_models"] = models
+                if not has_embed:
+                    ready = False
+            else:
+                r = await client.get(f"{settings.embedding_base_url.rstrip('/')}/models")
+                checks["embedding_service"] = "ok" if r.status_code < 400 else f"status:{r.status_code}"
+    except Exception as exc:
+        checks["embedding_service"] = f"error: {exc}"
+        ready = False
+
+    return JSONResponse(
+        {"status": "ready" if ready else "degraded", "checks": checks},
+        status_code=200 if ready else 503,
+    )
 
 
 # ============================================================================
@@ -121,10 +216,11 @@ async def memory_recall(
       guaranteed to fit within your specified `token_budget`.
     """
     try:
+        search_pillars = pillars if pillars is not None else ["semantic", "episodic", "procedural", "entity"]
         res = await svc_memory_recall(
             query=query,
             namespace=namespace,
-            pillars=pillars,
+            pillars=search_pillars,
             top_k=top_k,
             token_budget=token_budget,
         )
@@ -297,15 +393,16 @@ async def memory_edit(
     target_id_or_name: Annotated[
         str,
         Field(
-            description="UUID of the memory item (for semantic/episodic) or name of the procedure/entity."
+            default="",
+            description="UUID of the memory item, or search phrase/topic to auto-locate it, or name of the procedure/entity. Leave empty to auto-locate from instruction.",
         ),
-    ],
+    ] = "",
     instruction: Annotated[
         str,
         Field(
-            description="Natural language instruction describing the exact modification (e.g., 'Update region to ap-southeast-1')."
+            description="Natural language instruction describing the exact modification (e.g., 'Update region to ap-southeast-1' or 'Changed role to SRE')."
         ),
-    ],
+    ] = "",
     pillar: Annotated[
         Literal["semantic", "procedural", "entity"],
         Field(
@@ -377,6 +474,13 @@ async def memory_feedback(
             ),
         ),
     ] = None,
+    memory_query: Annotated[
+        Optional[str],
+        Field(
+            default=None,
+            description="Optional search query or memory topic to auto-locate target memory if UUID is not known.",
+        ),
+    ] = None,
     namespace: Annotated[
         str,
         Field(
@@ -405,6 +509,7 @@ async def memory_feedback(
             success=success,
             failure_reason=failure_reason,
             namespace=namespace,
+            memory_query=memory_query,
         )
         return json.dumps(res, indent=2)
     finally:
@@ -682,27 +787,54 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Strata FastMCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
-        default="stdio",
-        help="FastMCP transport mode (default: stdio)",
+        choices=["stdio", "sse", "streamable-http", "http"],
+        default=settings.mcp_transport,
+        help="FastMCP transport mode: stdio, sse, streamable-http, or http (default from MCP_TRANSPORT or stdio)",
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="Host for SSE transport (default: 0.0.0.0)",
+        default=settings.mcp_host,
+        help="Host for HTTP/SSE transport (default from MCP_HOST or 0.0.0.0)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port for SSE transport (default: 8000)",
+        default=settings.mcp_port,
+        help="Port for HTTP/SSE transport (default from MCP_PORT or 8000)",
+    )
+    parser.add_argument(
+        "--path",
+        default=settings.mcp_path,
+        help="HTTP endpoint path for streamable-http/http transport (default from MCP_PATH or /mcp)",
+    )
+    parser.add_argument(
+        "--stateful",
+        action="store_true",
+        help="Disable stateless HTTP mode and preserve per-client in-memory MCP sessions",
     )
     args = parser.parse_args()
 
-    if args.transport == "sse":
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.run(transport="sse")
+    if args.transport in ("sse", "streamable-http", "http"):
+        http_middleware = (
+            [Middleware(BearerAuthMiddleware, token=settings.mcp_auth_token)]
+            if settings.mcp_auth_token
+            else None
+        )
+        run_kwargs: Dict[str, Any] = {
+            "transport": args.transport,
+            "host": args.host,
+            "port": args.port,
+            "middleware": http_middleware,
+        }
+        if args.transport in ("streamable-http", "http"):
+            run_kwargs["path"] = args.path
+            run_kwargs["stateless_http"] = False if args.stateful else settings.mcp_stateless_http
+
+        logger.info(
+            f"Starting Strata MCP server (transport={args.transport}, host={args.host}, "
+            f"port={args.port}, path={args.path}, auth={'enabled' if settings.mcp_auth_token else 'disabled'})"
+        )
+        mcp.run(**run_kwargs)
     else:
         mcp.run(transport="stdio")
 
