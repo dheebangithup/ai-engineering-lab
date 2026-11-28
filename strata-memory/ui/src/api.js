@@ -18,10 +18,19 @@ export async function fetchStats(namespace = 'default') {
   }
 }
 
-export async function fetchMemories(namespace = 'default', pillar = null, status = 'all', limit = 50, offset = 0) {
+export async function fetchMemories(
+  namespace = 'default',
+  pillar = null,
+  status = 'all',
+  search = '',
+  timeRange = '30d',
+  page = 1,
+  pageSize = 25
+) {
   try {
-    let url = `${API_BASE}/ui/memories?namespace=${encodeURIComponent(namespace)}&status=${status}&limit=${limit}&offset=${offset}`;
-    if (pillar) url += `&pillar=${pillar}`;
+    let url = `${API_BASE}/ui/memories?namespace=${encodeURIComponent(namespace)}&status=${status}&time_range=${timeRange}&page=${page}&page_size=${pageSize}`;
+    if (pillar && pillar !== 'all') url += `&pillar=${encodeURIComponent(pillar)}`;
+    if (search && search.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
@@ -29,6 +38,9 @@ export async function fetchMemories(namespace = 'default', pillar = null, status
     console.warn("Using offline memories fallback:", err);
     return {
       total: 3,
+      page: 1,
+      page_size: 25,
+      total_pages: 1,
       items: [
         {
           memory_id: "mem-003c",
@@ -77,9 +89,19 @@ export async function fetchMemories(namespace = 'default', pillar = null, status
   }
 }
 
-export async function fetchGraph(namespace = 'default', includeInvalidated = true) {
+export async function fetchGraph(
+  namespace = 'default',
+  includeInvalidated = true,
+  search = '',
+  timeRange = '30d',
+  centerEntityId = null,
+  limit = 60
+) {
   try {
-    const res = await fetch(`${API_BASE}/ui/graph?namespace=${encodeURIComponent(namespace)}&include_invalidated=${includeInvalidated}`);
+    let url = `${API_BASE}/ui/graph?namespace=${encodeURIComponent(namespace)}&include_invalidated=${includeInvalidated}&time_range=${timeRange}&limit=${limit}`;
+    if (search && search.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+    if (centerEntityId) url += `&center_entity_id=${encodeURIComponent(centerEntityId)}`;
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   } catch (err) {

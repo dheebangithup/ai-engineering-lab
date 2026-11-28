@@ -374,10 +374,12 @@ async def api_ui_memories(
     namespace: str = "default",
     pillar: Optional[str] = None,
     status: Optional[str] = "all",
-    limit: int = 50,
-    offset: int = 0,
+    search: Optional[str] = None,
+    time_range: Optional[str] = "30d",
+    page: int = 1,
+    page_size: int = 25,
 ) -> Dict[str, Any]:
-    """Paginated memory inspection with active/superseded filters."""
+    """Paginated memory inspection with full-text search, date-windowing, and status filters."""
     pool = await get_db_pool()
     conditions = ["namespace = $1"]
     args: List[Any] = [namespace]
@@ -391,13 +393,38 @@ async def api_ui_memories(
     elif status == "superseded":
         conditions.append("(valid_until IS NOT NULL AND valid_until <= NOW())")
 
+    # Time-range windowing
+    if time_range == "24h":
+        conditions.append("created_at >= NOW() - INTERVAL '24 hours'")
+    elif time_range == "7d":
+        conditions.append("created_at >= NOW() - INTERVAL '7 days'")
+    elif time_range == "30d":
+        conditions.append("created_at >= NOW() - INTERVAL '30 days'")
+    elif time_range == "90d":
+        conditions.append("created_at >= NOW() - INTERVAL '90 days'")
+
+    # Full-text / substring search
+    if search and search.strip():
+        clean_search = search.strip()
+        args.append(clean_search)
+        search_idx = len(args)
+        conditions.append(
+            f"(to_tsvector('english', summary) @@ plainto_tsquery('english', ${search_idx}) OR summary ILIKE ('%' || ${search_idx} || '%'))"
+        )
+
     where_clause = " AND ".join(conditions)
+
+    # Safe pagination bounds
+    page = max(1, page)
+    page_size = max(5, min(100, page_size))
+    offset = (page - 1) * page_size
 
     async with pool.acquire() as c:
         count_row = await c.fetchrow(f"SELECT COUNT(*) as count FROM memories WHERE {where_clause}", *args)
         total = count_row["count"] if count_row else 0
+        total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 1
 
-        args.extend([limit, offset])
+        args.extend([page_size, offset])
         sql = f"""
             SELECT 
                 memory_id, namespace, type, summary, payload, tags,
@@ -432,37 +459,123 @@ async def api_ui_memories(
                 "is_active": r["is_active"],
             })
 
-        return {"total": total, "items": items, "limit": limit, "offset": offset}
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "items": items,
+        }
 
 
 @api_router.get("/ui/graph")
 async def api_ui_graph(
     namespace: str = "default",
     include_invalidated: bool = True,
+    search: Optional[str] = None,
+    time_range: Optional[str] = "30d",
+    center_entity_id: Optional[str] = None,
+    limit: int = 60,
 ) -> Dict[str, Any]:
-    """Retrieves full entity nodes and relationships for the interactive graph canvas."""
+    """Retrieves entity nodes and relationships bounded by search, 1-hop focus, and limit."""
     pool = await get_db_pool()
-    async with pool.acquire() as c:
-        nodes_rows = await c.fetch(
-            """
-            SELECT entity_id, name, entity_type, summary, attributes, is_active, updated_at
-            FROM entity_nodes
-            WHERE namespace = $1
-            ORDER BY name ASC;
-            """,
-            namespace,
-        )
+    safe_limit = max(10, min(200, limit))
 
-        edge_conditions = ["namespace = $1"]
-        if not include_invalidated:
-            edge_conditions.append("(valid_until IS NULL OR valid_until > NOW())")
-        edge_sql = f"""
-            SELECT edge_id, source_entity_id, relation_type, target_entity_id, fact_summary, properties, valid_from, valid_until,
-                   CASE WHEN (valid_until IS NULL OR valid_until > NOW()) THEN TRUE ELSE FALSE END as is_active
-            FROM entity_edges
-            WHERE {" AND ".join(edge_conditions)};
-        """
-        edges_rows = await c.fetch(edge_sql, namespace)
+    async with pool.acquire() as c:
+        if center_entity_id:
+            # 1-Hop Ego-Centric sub-graph expansion from a selected center node
+            nodes_rows = await c.fetch(
+                """
+                WITH focal_edges AS (
+                    SELECT source_entity_id, target_entity_id
+                    FROM entity_edges
+                    WHERE namespace = $1 
+                      AND (source_entity_id = $2::uuid OR target_entity_id = $2::uuid)
+                      AND ($3::bool OR valid_until IS NULL OR valid_until > NOW())
+                    LIMIT $4
+                ),
+                focal_node_ids AS (
+                    SELECT $2::uuid as entity_id
+                    UNION
+                    SELECT source_entity_id FROM focal_edges
+                    UNION
+                    SELECT target_entity_id FROM focal_edges
+                )
+                SELECT n.entity_id, n.name, n.entity_type, n.summary, n.attributes, n.is_active, n.updated_at
+                FROM entity_nodes n
+                INNER JOIN focal_node_ids fn ON n.entity_id = fn.entity_id
+                WHERE n.namespace = $1;
+                """,
+                namespace,
+                center_entity_id,
+                include_invalidated,
+                safe_limit,
+            )
+
+            edge_sql = """
+                SELECT edge_id, source_entity_id, relation_type, target_entity_id, fact_summary, properties, valid_from, valid_until,
+                       CASE WHEN (valid_until IS NULL OR valid_until > NOW()) THEN TRUE ELSE FALSE END as is_active
+                FROM entity_edges
+                WHERE namespace = $1
+                  AND (source_entity_id = $2::uuid OR target_entity_id = $2::uuid)
+                  AND ($3::bool OR valid_until IS NULL OR valid_until > NOW())
+                LIMIT $4;
+            """
+            edges_rows = await c.fetch(edge_sql, namespace, center_entity_id, include_invalidated, safe_limit)
+
+        else:
+            # Standard bounded node retrieval with optional search & date filter
+            node_conditions = ["namespace = $1"]
+            node_args: List[Any] = [namespace]
+
+            if search and search.strip():
+                clean_search = search.strip()
+                node_args.append(clean_search)
+                node_conditions.append(f"(name ILIKE ('%' || ${len(node_args)} || '%') OR summary ILIKE ('%' || ${len(node_args)} || '%'))")
+
+            if time_range == "24h":
+                node_conditions.append("updated_at >= NOW() - INTERVAL '24 hours'")
+            elif time_range == "7d":
+                node_conditions.append("updated_at >= NOW() - INTERVAL '7 days'")
+            elif time_range == "30d":
+                node_conditions.append("updated_at >= NOW() - INTERVAL '30 days'")
+            elif time_range == "90d":
+                node_conditions.append("updated_at >= NOW() - INTERVAL '90 days'")
+
+            node_args.append(safe_limit)
+            nodes_rows = await c.fetch(
+                f"""
+                SELECT entity_id, name, entity_type, summary, attributes, is_active, updated_at
+                FROM entity_nodes
+                WHERE {" AND ".join(node_conditions)}
+                ORDER BY updated_at DESC
+                LIMIT ${len(node_args)};
+                """,
+                *node_args,
+            )
+
+            retrieved_node_ids = [r["entity_id"] for r in nodes_rows]
+            if retrieved_node_ids:
+                edge_conditions = [
+                    "namespace = $1",
+                    "(source_entity_id = ANY($2::uuid[]) OR target_entity_id = ANY($2::uuid[]))",
+                ]
+                if not include_invalidated:
+                    edge_conditions.append("(valid_until IS NULL OR valid_until > NOW())")
+
+                edges_rows = await c.fetch(
+                    f"""
+                    SELECT edge_id, source_entity_id, relation_type, target_entity_id, fact_summary, properties, valid_from, valid_until,
+                           CASE WHEN (valid_until IS NULL OR valid_until > NOW()) THEN TRUE ELSE FALSE END as is_active
+                    FROM entity_edges
+                    WHERE {" AND ".join(edge_conditions)}
+                    LIMIT {safe_limit * 2};
+                    """,
+                    namespace,
+                    retrieved_node_ids,
+                )
+            else:
+                edges_rows = []
 
         nodes = [
             {
@@ -491,7 +604,7 @@ async def api_ui_graph(
             for r in edges_rows
         ]
 
-        return {"nodes": nodes, "edges": edges}
+        return {"nodes": nodes, "edges": edges, "limit": safe_limit}
 
 
 @api_router.get("/ui/lineage/{memory_id}")

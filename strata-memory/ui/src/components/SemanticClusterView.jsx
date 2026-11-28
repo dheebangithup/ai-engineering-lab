@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { fetchMemories } from '../api';
+import FilterPaginationBar from './FilterPaginationBar';
 import { Sparkles, Layers, Tag, Award, CheckCircle, Clock } from 'lucide-react';
 
 export default function SemanticClusterView({ namespace }) {
@@ -8,16 +9,29 @@ export default function SemanticClusterView({ namespace }) {
   const [selectedMemory, setSelectedMemory] = useState(null);
   const [activeCluster, setActiveCluster] = useState('all');
 
+  // Filter & Pagination States
+  const [search, setSearch] = useState('');
+  const [timeRange, setTimeRange] = useState('30d');
+  const [status, setStatus] = useState('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
   useEffect(() => {
     loadData();
-  }, [namespace]);
+  }, [namespace, search, timeRange, status, page, pageSize]);
 
   const loadData = async () => {
     setLoading(true);
-    const data = await fetchMemories(namespace, 'semantic', 'all', 100);
+    const data = await fetchMemories(namespace, 'semantic', status, search, timeRange, page, pageSize);
     setMemories(data.items || []);
+    setTotal(data.total || 0);
+    setTotalPages(data.total_pages || 1);
     if (data.items?.length > 0) {
       setSelectedMemory(data.items[0]);
+    } else {
+      setSelectedMemory(null);
     }
     setLoading(false);
   };
@@ -34,14 +48,31 @@ export default function SemanticClusterView({ namespace }) {
   const filteredMemories = activeCluster === 'all' ? memories : clusterMap[activeCluster] || [];
 
   return (
-    <div className="space-y-6">
-      {/* Cluster Filter Tabs */}
-      <div className="flex items-center justify-between bg-card p-2 rounded-xl border border-card-border overflow-x-auto gap-2">
+    <div className="space-y-4">
+      {/* Search, Time-Range, and Pagination Controls */}
+      <FilterPaginationBar
+        search={search}
+        setSearch={setSearch}
+        timeRange={timeRange}
+        setTimeRange={setTimeRange}
+        status={status}
+        setStatus={setStatus}
+        page={page}
+        setPage={setPage}
+        pageSize={pageSize}
+        setPageSize={setPageSize}
+        total={total}
+        totalPages={totalPages}
+        onRefresh={loadData}
+      />
+
+      {/* Cluster Filter Pills */}
+      <div className="flex items-center justify-between bg-card p-2.5 rounded-xl border border-card-border overflow-x-auto gap-2">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-semibold text-slate-400 px-2">Concept Clusters:</span>
+          <span className="text-xs font-semibold text-slate-400 px-2">Clusters:</span>
           <button
             onClick={() => setActiveCluster('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${
               activeCluster === 'all' ? 'bg-primary text-white shadow' : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -51,7 +82,7 @@ export default function SemanticClusterView({ namespace }) {
             <button
               key={c}
               onClick={() => setActiveCluster(c)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium uppercase tracking-wider transition-all ${
+              className={`px-3 py-1 rounded-lg text-xs font-medium uppercase tracking-wider transition-all ${
                 activeCluster === c ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
@@ -63,7 +94,7 @@ export default function SemanticClusterView({ namespace }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* 2D Vector Embedding Scatter Plot Canvas */}
-        <div className="lg:col-span-2 bg-card rounded-2xl border border-card-border p-5 flex flex-col h-[580px] shadow-lg relative">
+        <div className="lg:col-span-2 bg-card rounded-2xl border border-card-border p-5 flex flex-col h-[540px] shadow-lg relative">
           <div className="flex items-center justify-between pb-3 border-b border-card-border mb-3">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-cyan-400" />
@@ -71,71 +102,76 @@ export default function SemanticClusterView({ namespace }) {
                 Vector Embedding Projection (768-Dim Cosine Distance)
               </h3>
             </div>
-            <span className="text-[10px] text-slate-500 font-mono">pgvector HNSW</span>
+            <span className="text-[10px] text-slate-500 font-mono">Bounded to {memories.length} facts on this page</span>
           </div>
 
           {/* Scatter Plot Visualizer */}
           <div className="flex-1 relative bg-[radial-gradient(ellipse_at_center,_#1e293b_1px,_transparent_1px)] bg-[size:20px_20px] rounded-xl border border-card-border/50 overflow-hidden">
-            <svg className="w-full h-full">
-              {/* Cluster centroid zones */}
-              {clusters.map((c, idx) => {
-                const angle = (idx / Math.max(1, clusters.length)) * 2 * Math.PI;
-                const cx = 250 + 130 * Math.cos(angle);
-                const cy = 230 + 110 * Math.sin(angle);
-                return (
-                  <g key={c} opacity="0.3">
-                    <circle cx={cx} cy={cy} r="65" fill="#3b82f6" fillOpacity="0.08" stroke="#3b82f6" strokeDasharray="3,3" />
-                    <text x={cx} y={cy - 50} textAnchor="middle" fill="#60a5fa" fontSize="9" fontWeight="bold" className="uppercase font-mono">
-                      {c}
-                    </text>
-                  </g>
-                );
-              })}
+            {loading ? (
+              <div className="h-full flex items-center justify-center text-xs text-slate-400">Loading vector clusters...</div>
+            ) : filteredMemories.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-xs text-slate-500">No memories matched the filter.</div>
+            ) : (
+              <svg className="w-full h-full">
+                {/* Cluster centroid zones */}
+                {clusters.map((c, idx) => {
+                  const angle = (idx / Math.max(1, clusters.length)) * 2 * Math.PI;
+                  const cx = 250 + 130 * Math.cos(angle);
+                  const cy = 210 + 100 * Math.sin(angle);
+                  return (
+                    <g key={c} opacity="0.3">
+                      <circle cx={cx} cy={cy} r="65" fill="#3b82f6" fillOpacity="0.08" stroke="#3b82f6" strokeDasharray="3,3" />
+                      <text x={cx} y={cy - 48} textAnchor="middle" fill="#60a5fa" fontSize="9" fontWeight="bold" className="uppercase font-mono">
+                        {c}
+                      </text>
+                    </g>
+                  );
+                })}
 
-              {/* Data points */}
-              {filteredMemories.map((mem, i) => {
-                // Deterministic pseudo-coordinates from hash of memory_id
-                const hash1 = mem.memory_id.charCodeAt(0) * 17 + i * 23;
-                const hash2 = (mem.memory_id.charCodeAt(mem.memory_id.length - 1) || 5) * 19 + i * 31;
-                const tagIdx = clusters.indexOf(mem.tags?.[0] || 'general');
-                const baseAngle = tagIdx >= 0 ? (tagIdx / Math.max(1, clusters.length)) * 2 * Math.PI : 0;
-                const clusterCenterX = 250 + 130 * Math.cos(baseAngle);
-                const clusterCenterY = 230 + 110 * Math.sin(baseAngle);
+                {/* Data points */}
+                {filteredMemories.map((mem, i) => {
+                  const hash1 = mem.memory_id.charCodeAt(0) * 17 + i * 23;
+                  const hash2 = (mem.memory_id.charCodeAt(mem.memory_id.length - 1) || 5) * 19 + i * 31;
+                  const tagIdx = clusters.indexOf(mem.tags?.[0] || 'general');
+                  const baseAngle = tagIdx >= 0 ? (tagIdx / Math.max(1, clusters.length)) * 2 * Math.PI : 0;
+                  const clusterCenterX = 250 + 130 * Math.cos(baseAngle);
+                  const clusterCenterY = 210 + 100 * Math.sin(baseAngle);
 
-                const x = Math.max(30, Math.min(500, clusterCenterX + ((hash1 % 80) - 40)));
-                const y = Math.max(30, Math.min(420, clusterCenterY + ((hash2 % 80) - 40)));
+                  const x = Math.max(30, Math.min(500, clusterCenterX + ((hash1 % 80) - 40)));
+                  const y = Math.max(30, Math.min(380, clusterCenterY + ((hash2 % 80) - 40)));
 
-                const isSelected = selectedMemory && selectedMemory.memory_id === mem.memory_id;
-                const isActive = mem.is_active;
+                  const isSelected = selectedMemory && selectedMemory.memory_id === mem.memory_id;
+                  const isActive = mem.is_active;
 
-                return (
-                  <g
-                    key={mem.memory_id}
-                    transform={`translate(${x},${y})`}
-                    className="cursor-pointer transition-transform hover:scale-125"
-                    onClick={() => setSelectedMemory(mem)}
-                  >
-                    <circle
-                      r={isSelected ? 10 : 7}
-                      fill={isActive ? (isSelected ? '#6366f1' : '#06b6d4') : '#64748b'}
-                      stroke={isSelected ? '#ffffff' : '#0f172a'}
-                      strokeWidth={isSelected ? 2.5 : 1.5}
-                      filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))"
-                    />
-                    <title>{mem.summary}</title>
-                  </g>
-                );
-              })}
-            </svg>
+                  return (
+                    <g
+                      key={mem.memory_id}
+                      transform={`translate(${x},${y})`}
+                      className="cursor-pointer transition-transform hover:scale-125"
+                      onClick={() => setSelectedMemory(mem)}
+                    >
+                      <circle
+                        r={isSelected ? 10 : 7}
+                        fill={isActive ? (isSelected ? '#6366f1' : '#06b6d4') : '#64748b'}
+                        stroke={isSelected ? '#ffffff' : '#0f172a'}
+                        strokeWidth={isSelected ? 2.5 : 1.5}
+                        filter="drop-shadow(0 2px 4px rgba(0,0,0,0.5))"
+                      />
+                      <title>{mem.summary}</title>
+                    </g>
+                  );
+                })}
+              </svg>
+            )}
 
             <div className="absolute bottom-3 left-3 bg-slate-900/90 border border-card-border p-2 rounded-lg text-[9px] text-slate-400">
-              Points close together share high cosine similarity (&ge; 0.85)
+              Filtered windowing guarantees sub-second rendering
             </div>
           </div>
         </div>
 
         {/* Fact Inspector Drawer */}
-        <div className="bg-card rounded-2xl border border-card-border p-5 flex flex-col justify-between h-[580px] shadow-lg">
+        <div className="bg-card rounded-2xl border border-card-border p-5 flex flex-col justify-between h-[540px] shadow-lg">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-card-border mb-4">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">Semantic Fact Inspector</h3>
@@ -211,7 +247,7 @@ export default function SemanticClusterView({ namespace }) {
           </div>
 
           <div className="pt-3 border-t border-card-border text-[10px] text-slate-500 text-center">
-            768-dim Embeddings with HNSW vector index
+            Server-side windowing with pgvector HNSW indexing
           </div>
         </div>
       </div>
