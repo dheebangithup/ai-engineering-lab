@@ -7,6 +7,8 @@ cd "$DIR"
 MODE="full"
 if [[ "${1:-}" == "--external" ]]; then
   MODE="external"
+elif [[ "${1:-}" == "--neon" ]]; then
+  MODE="neon"
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -26,6 +28,9 @@ echo "==========================================================================
 if [[ "$MODE" == "external" ]]; then
   echo "Starting Strata MCP against external Neon DB / Host Ollama..."
   docker compose -f docker-compose.external.yml up -d --build
+elif [[ "$MODE" == "neon" ]]; then
+  echo "Starting Strata MCP with Neon DB + Dockerized Ollama (local postgres disabled)..."
+  docker compose -f docker-compose.neon.yml up -d --build
 else
   echo "Starting full local stack (pgvector + Ollama + auto-model pull + Strata MCP)..."
   docker compose up -d --build

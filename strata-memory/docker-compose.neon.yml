@@ -1,0 +1,79 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: strata-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - strata_ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: strata-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-nomic-embed-text}
+      MEMORY_LLM_ENABLED: ${MEMORY_LLM_ENABLED:-true}
+      MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-qwen2.5:3b-instruct}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "Pulling embedding model: $${EMBEDDING_MODEL_NAME}"
+        ollama pull "$${EMBEDDING_MODEL_NAME}"
+        if [ "$${MEMORY_LLM_ENABLED}" = "true" ]; then
+          echo "Pulling cognitive LLM model: $${MEMORY_LLM_MODEL}"
+          ollama pull "$${MEMORY_LLM_MODEL}"
+        fi
+        echo "Ollama models ready."
+    restart: "no"
+
+  strata-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: strata-mcp
+    depends_on:
+      ollama-init:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://ollama:11434/v1}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-ollama}
+      EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-nomic-embed-text}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-768}
+      MEMORY_LLM_ENABLED: ${MEMORY_LLM_ENABLED:-true}
+      MEMORY_LLM_BASE_URL: ${MEMORY_LLM_BASE_URL:-http://ollama:11434/v1}
+      MEMORY_LLM_API_KEY: ${MEMORY_LLM_API_KEY:-ollama}
+      MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-qwen2.5:3b-instruct}
+      MEMORY_LLM_TIMEOUT_SECONDS: ${MEMORY_LLM_TIMEOUT_SECONDS:-120.0}
+      AUTO_MIGRATE: "true"
+      MCP_TRANSPORT: "streamable-http"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8000"
+      MCP_PATH: ${MCP_PATH:-/mcp}
+      MCP_STATELESS_HTTP: ${MCP_STATELESS_HTTP:-true}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+    ports:
+      - "${MCP_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  strata_ollama_data:
